@@ -76,6 +76,9 @@ def load_and_split(
     chunks: list[Document] = []
     for document in documents:
         merged = {**document.metadata, **metadata}
+        # The loader records the temporary path it read from. It is meaningless
+        # once the chunks are indexed, so it is dropped.
+        merged.pop("source", None)
         if extension == ".pdf":
             page_value = merged.get("page")
             if page_value is not None:
@@ -84,6 +87,14 @@ def load_and_split(
         for chunk in split:
             chunk.metadata = {**chunk.metadata, **merged}
             chunks.append(chunk)
+
+    # Chunk numbers run across the whole document, so a PDF cites page and chunk
+    # together. The identifier is explicit so that re-ingesting the same document
+    # replaces its previous chunks instead of adding duplicates beside them.
+    document_id = metadata["document_id"]
+    for index, chunk in enumerate(chunks):
+        chunk.metadata["chunk_index"] = index
+        chunk.metadata["chunk_id"] = f"{document_id}::{index}"
 
     return [chunk for chunk in chunks if chunk.page_content.strip()]
 
@@ -140,13 +151,33 @@ def _is_retryable(exc: Exception) -> bool:
     )
 
 
-def build_store(settings: Settings, embeddings: Embeddings) -> Chroma:
-    """Return the Chroma vector store with cosine distance."""
+def build_store(settings: Settings, embeddings: Embeddings | None = None) -> Chroma:
+    """Return the Chroma vector store with cosine distance.
+
+    The embedding function is optional. Listing and deleting documents touch only
+    the collection and never embed anything, so those routes work without a key.
+    """
     return Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=embeddings,
         persist_directory=settings.chroma_persist_dir,
         collection_metadata={"hnsw:space": "cosine"},
+    )
+
+
+def add_chunks(store: Chroma, chunks: list[Document], vectors: list[list[float]]) -> None:
+    """Add chunks to the store using vectors that were already computed.
+
+    The store is reached through its collection because the wrapper's add_texts
+    would embed the same texts a second time. Chunk identifiers are explicit, and
+    the underlying call is an upsert, so re-ingesting a document replaces its
+    previous version instead of duplicating it.
+    """
+    store._collection.upsert(
+        ids=[chunk.metadata["chunk_id"] for chunk in chunks],
+        documents=[chunk.page_content for chunk in chunks],
+        metadatas=[dict(chunk.metadata) for chunk in chunks],
+        embeddings=vectors,
     )
 
 
