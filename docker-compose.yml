@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    image: aurora-knowledge-assistant
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/app/data/chroma
+    restart: unless-stopped
+
+volumes:
+  chroma-data:

@@ -1,0 +1,31 @@
+# local environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# secrets
+.env
+
+# local vector index, the named volume provides it at run time
+data/chroma/
+
+# editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# version control and working notes
+.git/
+build.md
+*.bak
+for_me.txt
+simplify_build.md
+task.txt
+
+# not needed at run time
+docs/
+tests/
