@@ -1,0 +1,282 @@
+[
+  {
+    "id": "a01",
+    "category": "answerable",
+    "question": "How much paid time off does a regular full-time employee accrue per month, and what does that add up to across a full year?",
+    "expected_answer": "Ten hours of paid time off for each full month worked, which is one hundred and twenty hours, or fifteen days, across a full year.",
+    "gold_document_names": ["employee_handbook.pdf"],
+    "gold_fact_keywords": ["10 hours", "120 hours", "15 days"]
+  },
+  {
+    "id": "a02",
+    "category": "answerable",
+    "question": "What is the cap on carrying unused paid time off into the following calendar year, and when are hours above the cap lost?",
+    "expected_answer": "An employee may carry over a maximum of forty hours, or five days, of unused paid time off. Any unused balance above forty hours is lost on 31 December.",
+    "gold_document_names": ["employee_handbook.pdf"],
+    "gold_fact_keywords": ["40 hours", "31 December"]
+  },
+  {
+    "id": "a03",
+    "category": "answerable",
+    "question": "Who approves an expense of 800 dollars, and who approves an expense of 1,500 dollars?",
+    "expected_answer": "An expense of 800 dollars falls between 250 and 1,000 dollars and is approved by the department lead. An expense of 1,000 dollars or more is approved by Finance.",
+    "gold_document_names": ["employee_handbook.pdf"],
+    "gold_fact_keywords": ["department lead", "Finance"]
+  },
+  {
+    "id": "a04",
+    "category": "answerable",
+    "question": "Which kinds of expense must be approved in writing by Finance before the money is spent?",
+    "expected_answer": "Any single purchase over one thousand dollars, any software subscription, and any contractor engagement must be approved in writing in advance by Finance.",
+    "gold_document_names": ["employee_handbook.pdf"],
+    "gold_fact_keywords": ["software subscription", "contractor"]
+  },
+  {
+    "id": "a05",
+    "category": "answerable",
+    "question": "How far in advance must an employee expecting a child give written notice to People Operations?",
+    "expected_answer": "If the expected date is more than fifteen weeks away, the employee must give notice at or before the end of the fifteenth week before that date. Otherwise notice must be given as soon as reasonably practicable, in practice within seven days of learning the date.",
+    "gold_document_names": ["employee_handbook.pdf"],
+    "gold_fact_keywords": ["15th week", "People Operations"]
+  },
+  {
+    "id": "a06",
+    "category": "answerable",
+    "question": "Within how many business days must a company laptop be enrolled in mobile device management?",
+    "expected_answer": "Every company laptop must be enrolled in mobile device management within five business days of the employee receiving the device.",
+    "gold_document_names": ["it_security_policy.txt"],
+    "gold_fact_keywords": ["5 business days", "mobile device management"]
+  },
+  {
+    "id": "a07",
+    "category": "answerable",
+    "question": "Within what time must a lost or stolen company device be reported to the security team?",
+    "expected_answer": "A lost or stolen company device must be reported to the security team within one hour of discovery.",
+    "gold_document_names": ["it_security_policy.txt"],
+    "gold_fact_keywords": ["1 hour", "security team"]
+  },
+  {
+    "id": "a08",
+    "category": "answerable",
+    "question": "How much retirement match does an employee receive for contributing five percent of salary, and what is the first step of the match formula?",
+    "expected_answer": "An employee who contributes five percent receives the full match, worth four percent of salary. The first step matches one hundred percent of the first three percent of salary contributed.",
+    "gold_document_names": ["benefits_guide.md"],
+    "gold_fact_keywords": ["4 percent", "first 3 percent"]
+  },
+  {
+    "id": "a09",
+    "category": "answerable",
+    "question": "What is the annual wellness stipend for a regular full-time employee, and does the stipend cover home office equipment?",
+    "expected_answer": "Every regular full-time employee receives a wellness stipend of 500 USD per calendar year. The stipend does not cover home office equipment, which is reimbursed under the remote work policy.",
+    "gold_document_names": ["benefits_guide.md"],
+    "gold_fact_keywords": ["500 USD", "home office equipment"]
+  },
+  {
+    "id": "a10",
+    "category": "answerable",
+    "question": "How many days per week may an eligible employee work remotely, and which anchor days must they attend the office?",
+    "expected_answer": "Eligible employees may work remotely up to three days per week. The company operates anchor days on Tuesday and Thursday, and every remote employee is expected in the office on both.",
+    "gold_document_names": ["remote_work_policy.md"],
+    "gold_fact_keywords": ["3 days", "Tuesday", "Thursday"]
+  },
+  {
+    "id": "m01",
+    "category": "multi_evidence",
+    "question": "An employee's baby is due in four months. How much paid parental leave do they get, and by when must they notify People Operations?",
+    "expected_answer": "An employee who gives birth receives 16 weeks of paid parental leave at 100 percent of base salary. Because the expected date is more than fifteen weeks away, notice must be given to People Operations at or before the end of the fifteenth week before that date.",
+    "gold_document_names": ["benefits_guide.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["16 weeks", "15th week"],
+    "gold_fact_keywords_by_document": {
+      "benefits_guide.md": ["16 weeks"],
+      "employee_handbook.pdf": ["15th week"]
+    }
+  },
+  {
+    "id": "m02",
+    "category": "multi_evidence",
+    "question": "An employee's partner is giving birth. How much paid parental leave is the employee entitled to, and who must they notify?",
+    "expected_answer": "Where the employee's partner gives birth, the employee receives 8 weeks of paid parental leave at 100 percent of base salary. The employee must give written notice to People Operations.",
+    "gold_document_names": ["benefits_guide.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["8 weeks", "People Operations"],
+    "gold_fact_keywords_by_document": {
+      "benefits_guide.md": ["8 weeks"],
+      "employee_handbook.pdf": ["People Operations"]
+    }
+  },
+  {
+    "id": "m03",
+    "category": "multi_evidence",
+    "question": "An employee with more than twelve months of service is adopting a child. How much paid parental leave do they get, and what document must they provide instead of a medical certificate?",
+    "expected_answer": "An employee who becomes a parent through adoption receives 8 weeks of paid parental leave at 100 percent of base salary. For an adoption, the matching letter or placement notice is required instead of a medical certificate.",
+    "gold_document_names": ["benefits_guide.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["8 weeks", "placement notice"],
+    "gold_fact_keywords_by_document": {
+      "benefits_guide.md": ["8 weeks"],
+      "employee_handbook.pdf": ["placement notice"]
+    }
+  },
+  {
+    "id": "m04",
+    "category": "multi_evidence",
+    "question": "Which home office items are never reimbursed under the remote work policy, and who must approve an expense of 800 dollars?",
+    "expected_answer": "Computers, laptops and mobile phones are provided by the company through IT and are never reimbursed under the policy. An expense of 800 dollars falls between 250 and 1,000 dollars and is approved by the department lead.",
+    "gold_document_names": ["remote_work_policy.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["laptop", "mobile phone", "department lead"],
+    "gold_fact_keywords_by_document": {
+      "remote_work_policy.md": ["laptop", "mobile phone"],
+      "employee_handbook.pdf": ["department lead"]
+    }
+  },
+  {
+    "id": "m05",
+    "category": "multi_evidence",
+    "question": "What is the home office equipment allowance in an employee's first year of remote working, and who must approve a single item costing 900 dollars?",
+    "expected_answer": "Up to 1,200 USD may be claimed in an employee's first year of remote working. A 900 dollar item is above the 500 dollar limit that needs written manager pre-approval, and an expense between 250 and 1,000 dollars is approved by the department lead.",
+    "gold_document_names": ["remote_work_policy.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["1,200 USD", "department lead"],
+    "gold_fact_keywords_by_document": {
+      "remote_work_policy.md": ["1,200 USD"],
+      "employee_handbook.pdf": ["department lead"]
+    }
+  },
+  {
+    "id": "m06",
+    "category": "multi_evidence",
+    "question": "By when must a new hire's company laptop be enrolled in mobile device management, and what should the new hire do if the laptop has not arrived by the start date?",
+    "expected_answer": "Every company laptop must be enrolled in mobile device management within five business days of the employee receiving the device. A new hire who receives a laptop after starting should raise it with IT the same day.",
+    "gold_document_names": ["it_security_policy.txt", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["5 business days", "same day"],
+    "gold_fact_keywords_by_document": {
+      "it_security_policy.txt": ["5 business days"],
+      "employee_handbook.pdf": ["same day"]
+    }
+  },
+  {
+    "id": "m07",
+    "category": "multi_evidence",
+    "question": "Does the wellness stipend cover a new remote employee's desk and chair, and which policy does reimburse that equipment?",
+    "expected_answer": "The wellness stipend does not cover home office equipment such as desks and chairs. That equipment is reimbursed under the remote work policy, which sets its own list and its own limits.",
+    "gold_document_names": ["benefits_guide.md", "remote_work_policy.md"],
+    "gold_fact_keywords": ["does not cover", "desk"],
+    "gold_fact_keywords_by_document": {
+      "benefits_guide.md": ["does not cover"],
+      "remote_work_policy.md": ["desk"]
+    }
+  },
+  {
+    "id": "m08",
+    "category": "multi_evidence",
+    "question": "What is the annual learning and development budget, and what is the manager's duty in relation to it?",
+    "expected_answer": "Every regular full-time employee receives a learning and development budget of 1,200 USD per fiscal year, which runs from 1 April to 31 March. A manager is responsible for approving the learning budget described in the benefits guide.",
+    "gold_document_names": ["benefits_guide.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["1,200 USD", "learning budget"],
+    "gold_fact_keywords_by_document": {
+      "benefits_guide.md": ["1,200 USD"],
+      "employee_handbook.pdf": ["learning budget"]
+    }
+  },
+  {
+    "id": "m09",
+    "category": "multi_evidence",
+    "question": "How many remote days may an employee take each week, and what must they do to reach internal Aurora Labs systems from home?",
+    "expected_answer": "Eligible employees may work remotely up to three days per week. Every connection to an internal Aurora Labs system must go through the company virtual private network.",
+    "gold_document_names": ["remote_work_policy.md", "it_security_policy.txt"],
+    "gold_fact_keywords": ["3 days", "virtual private network"],
+    "gold_fact_keywords_by_document": {
+      "remote_work_policy.md": ["3 days"],
+      "it_security_policy.txt": ["virtual private network"]
+    }
+  },
+  {
+    "id": "m10",
+    "category": "multi_evidence",
+    "question": "When does Aurora Labs hold all hands meetings, and what is the daily meal limit for an employee who travels to one?",
+    "expected_answer": "Aurora Labs holds an all hands meeting twice per year, in April and October, and travel and accommodation are paid by the company. Meals while travelling are reimbursed up to 45 USD per day in the employee's normal country of work.",
+    "gold_document_names": ["remote_work_policy.md", "employee_handbook.pdf"],
+    "gold_fact_keywords": ["April", "October", "45 USD"],
+    "gold_fact_keywords_by_document": {
+      "remote_work_policy.md": ["April", "October"],
+      "employee_handbook.pdf": ["45 USD"]
+    }
+  },
+  {
+    "id": "u01",
+    "category": "unanswerable",
+    "question": "What is the salary of the chief executive at Aurora Labs?",
+    "expected_answer": "No compensation figure for the chief executive appears in any document.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u02",
+    "category": "unanswerable",
+    "question": "Which two cities does Aurora Labs have offices in?",
+    "expected_answer": "The handbook states the company has two offices but never names their cities.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u03",
+    "category": "unanswerable",
+    "question": "What is the annual bonus target percentage for 2027?",
+    "expected_answer": "No bonus plan or bonus target appears in any document for any year.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u04",
+    "category": "unanswerable",
+    "question": "How is an annual bonus linked to the rating received in a performance review?",
+    "expected_answer": "Reviews describe pay adjustments, but no bonus tied to a rating is defined anywhere.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u05",
+    "category": "unanswerable",
+    "question": "How much notice must an employee give before resigning?",
+    "expected_answer": "No resignation or notice period for leaving appears in any document.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u06",
+    "category": "unanswerable",
+    "question": "What is the annual deductible that applies to dental coverage?",
+    "expected_answer": "Dental coverage states a monthly cost and an annual maximum but no deductible.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u07",
+    "category": "unanswerable",
+    "question": "What paid leave is available for an employee who has a pregnancy loss or a stillbirth?",
+    "expected_answer": "Parental leave covers birth, adoption and foster placement. No provision for pregnancy loss or stillbirth appears in any document.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u08",
+    "category": "unanswerable",
+    "question": "Which partner hotel chains have agreed the higher nightly accommodation rate?",
+    "expected_answer": "The handbook refers to a partner hotel chain in a small number of cities but never names any chain.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u09",
+    "category": "unanswerable",
+    "question": "What allowance or extra training does an onboarding buddy receive?",
+    "expected_answer": "The buddy role is described but no allowance or additional training for buddies appears.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  },
+  {
+    "id": "u10",
+    "category": "unanswerable",
+    "question": "Which of the two Aurora Labs offices has more employees?",
+    "expected_answer": "No headcount by office appears in any document.",
+    "gold_document_names": [],
+    "gold_fact_keywords": []
+  }
+]

@@ -1,0 +1,21 @@
+Threshold calibration sweep, produced by scripts/run_eval.py --sweep.
+
+Each candidate threshold was applied to the cached cosine distances for all 30
+questions. No generation model was called. "Stopped by gate" counts unanswerable
+questions where no chunk survives the threshold. "Keeping both gold docs" counts
+multi evidence questions where both gold documents remain in the gated set, which
+is the ceiling for the multi evidence rate.
+
+| Threshold | Unanswerable stopped by gate | Multi evidence keeping both gold docs | Answerable keeping gold doc | Gated chunks (avg) |
+|---|---|---|---|---|
+| 0.28 | 10/10 | 7/10 | 9/10 | 1.47 |
+| 0.29 | 9/10 | 7/10 | 10/10 | 2.03 |
+| 0.30 | 9/10 | 7/10 | 10/10 | 2.37 |
+| 0.31 | 8/10 | 7/10 | 10/10 | 2.67 |
+| 0.32 | 6/10 | 9/10 | 10/10 | 3.30 |
+| 0.33 | 4/10 | 10/10 | 10/10 | 4.10 |
+| 0.34 | 4/10 | 10/10 | 10/10 | 4.50 |
+| 0.35 | 3/10 | 10/10 | 10/10 | 5.07 |
+| 0.36 | 3/10 | 10/10 | 10/10 | 5.67 |
+| 0.38 | 0/10 | 10/10 | 10/10 | 6.30 |
+| 0.40 | 0/10 | 10/10 | 10/10 | 6.97 |

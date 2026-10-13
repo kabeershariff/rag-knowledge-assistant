@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     gemini_api_key: str | None = None
-    gemini_chat_model: str = "gemini-2.5-flash"
+    gemini_chat_model: str = "gemini-3.1-flash-lite"
     gemini_embedding_model: str = "gemini-embedding-001"
 
     chroma_persist_dir: str = "./data/chroma"
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 150
     retrieval_top_k: int = 8
-    relevance_max_distance: float = 0.35
+    relevance_max_distance: float = 0.33
 
     llm_temperature: float = 0.0
     api_max_retries: int = 3
