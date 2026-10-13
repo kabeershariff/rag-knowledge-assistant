@@ -1,4 +1,4 @@
-# Aurora Labs knowledge assistant
+# RAG API knowledge assistant
 
 A retrieval augmented generation service that answers questions about a set of
 documents and shows its work. Every answer carries the source document, the
