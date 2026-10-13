@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app import chains
-from app.config import Settings
+from app.config import UNAVAILABLE_MESSAGE, Settings
 
 logger = logging.getLogger("knowledge_assistant")
 
@@ -178,3 +178,91 @@ def delete_document(document_id: str, settings: Settings, registry: DocumentRegi
 def list_documents(registry: DocumentRegistry) -> list[dict]:
     """Return all registered documents."""
     return registry.list()
+
+
+def ask(question: str, settings: Settings, top_k: int | None = None) -> dict:
+    """Retrieve, gate, generate and validate an answer.
+
+    Returns a response dict with answer, answerable, sources and counts.
+    Raises IngestError(502) when the model returns malformed output after retry.
+    """
+    gated = retrieve(question, settings, top_k)
+
+    if not gated:
+        return {
+            "answer": UNAVAILABLE_MESSAGE,
+            "answerable": False,
+            "sources": [],
+            "retrieved_count": 0,
+            "evidence_count": 0,
+            "distinct_document_count": 0,
+        }
+
+    context_blocks = _format_context_blocks(gated)
+    chain = chains.build_answer_chain(settings)
+
+    try:
+        result = chain.invoke({"context_blocks": context_blocks, "question": question})
+    except Exception:
+        try:
+            result = chain.invoke({"context_blocks": context_blocks, "question": question})
+        except Exception as exc:
+            raise IngestError(502, "Model returned malformed output after retry.") from exc
+
+    valid_citations = [c for c in result.citations if 1 <= c <= len(gated)]
+    answerable = result.answerable and len(valid_citations) > 0
+    answer = result.answer if answerable else UNAVAILABLE_MESSAGE
+
+    sources = _build_evidence(gated, valid_citations)
+
+    return {
+        "answer": answer,
+        "answerable": answerable,
+        "sources": sources,
+        "retrieved_count": len(gated),
+        "evidence_count": len(valid_citations),
+        "distinct_document_count": len({s["document_id"] for s in sources}),
+    }
+
+
+def _format_context_blocks(gated: list[dict]) -> str:
+    """Format gated chunks as numbered context blocks for the prompt."""
+    blocks = []
+    for i, chunk in enumerate(gated, start=1):
+        location = _format_location(chunk["metadata"], len(chunk["text"]))
+        header = f"[{i}] DOC: {chunk['metadata']['document_name']} | LOC: {location}"
+        blocks.append(f"{header}\n{chunk['text']}")
+    return "\n\n".join(blocks)
+
+
+def _format_location(metadata: dict, text_length: int) -> str:
+    """Format a location string from chunk metadata."""
+    parts = []
+    if "page_number" in metadata:
+        parts.append(f"page {metadata['page_number']}")
+    parts.append(f"chunk {metadata['chunk_index']}")
+    parts.append(f"chars {metadata['start_index']} to {metadata['start_index'] + text_length}")
+    return ", ".join(parts)
+
+
+def _build_evidence(gated: list[dict], valid_citations: list[int]) -> list[dict]:
+    """Build evidence entries from valid citations."""
+    sources = []
+    for idx in valid_citations:
+        chunk = gated[idx - 1]
+        meta = chunk["metadata"]
+        location = {
+            "chunk_index": meta["chunk_index"],
+            "char_start": meta["start_index"],
+            "char_end": meta["start_index"] + len(chunk["text"]),
+        }
+        if "page_number" in meta:
+            location["page_number"] = meta["page_number"]
+        sources.append({
+            "document_name": meta["document_name"],
+            "document_id": meta["document_id"],
+            "excerpt": chunk["text"][:500],
+            "location": location,
+            "score": chunk["score"],
+        })
+    return sources

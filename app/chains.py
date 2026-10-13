@@ -7,14 +7,17 @@ suite swaps deterministic fakes through these same functions.
 
 import time
 
+from pydantic import BaseModel
+
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import COLLECTION_NAME, EMBEDDING_DIMENSIONS, REQUEST_TIMEOUT_SECONDS, Settings
+from app.config import COLLECTION_NAME, EMBEDDING_DIMENSIONS, MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, Settings
 
 ACCEPTED_EXTENSIONS = {".pdf", ".txt", ".md"}
 
@@ -145,3 +148,42 @@ def build_store(settings: Settings, embeddings: Embeddings) -> Chroma:
         persist_directory=settings.chroma_persist_dir,
         collection_metadata={"hnsw:space": "cosine"},
     )
+
+
+class Answer(BaseModel):
+    """Structured output from the answer model."""
+
+    answer: str
+    answerable: bool
+    citations: list[int]
+
+
+def build_answer_chain(settings: Settings, model=None):
+    """Compose prompt, model and structured output into the answer runnable.
+
+    The model parameter accepts an alternative implementation for testing.
+    The returned runnable takes a dict with context_blocks and question keys.
+    """
+    if model is None:
+        model = ChatGoogleGenerativeAI(
+            model=settings.gemini_chat_model,
+            google_api_key=settings.gemini_api_key,
+            temperature=settings.llm_temperature,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            max_retries=settings.api_max_retries,
+        )
+
+    system_message = (
+        "Answer only from the CONTEXT provided. Cite supporting context blocks "
+        "by their number in square brackets, for example [2]. If the CONTEXT "
+        "does not contain the answer, set answerable to false and start the "
+        "answer with the word UNAVAILABLE. Never use knowledge from outside "
+        "the CONTEXT. Return the answer as plain text."
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_message),
+        ("human", "{context_blocks}\n\n{question}"),
+    ])
+
+    return prompt | model.with_structured_output(Answer)
