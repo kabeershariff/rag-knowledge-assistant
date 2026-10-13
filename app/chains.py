@@ -5,11 +5,16 @@ settings it needs, and where relevant an alternative implementation. The test
 suite swaps deterministic fakes through these same functions.
 """
 
+import time
+
+from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import Settings
+from app.config import COLLECTION_NAME, EMBEDDING_DIMENSIONS, REQUEST_TIMEOUT_SECONDS, Settings
 
 ACCEPTED_EXTENSIONS = {".pdf", ".txt", ".md"}
 
@@ -78,3 +83,65 @@ def load_and_split(
             chunks.append(chunk)
 
     return [chunk for chunk in chunks if chunk.page_content.strip()]
+
+
+class ServiceUnavailableError(Exception):
+    """Raised when an external service is unavailable after retries."""
+
+
+def build_embeddings(settings: Settings) -> GoogleGenerativeAIEmbeddings:
+    """Return the Gemini embeddings model with the configured settings."""
+    return GoogleGenerativeAIEmbeddings(
+        model=settings.gemini_embedding_model,
+        google_api_key=settings.gemini_api_key,
+        output_dimensionality=EMBEDDING_DIMENSIONS,
+        request_options={"timeout": REQUEST_TIMEOUT_SECONDS},
+    )
+
+
+def embed_with_retry(
+    embeddings: Embeddings, texts: list[str], settings: Settings
+) -> list[list[float]]:
+    """Embed texts with exponential backoff on rate limit and server errors.
+
+    The LangChain embeddings wrapper has no retry setting of its own, so this
+    helper wraps the call with retries at 1, 2 and 4 seconds.
+    """
+    last_exception: Exception | None = None
+    for attempt in range(settings.api_max_retries + 1):
+        try:
+            return embeddings.embed_documents(texts)
+        except Exception as exc:
+            if not _is_retryable(exc):
+                raise
+            last_exception = exc
+            if attempt < settings.api_max_retries:
+                wait = 2 ** attempt
+                time.sleep(wait)
+    raise ServiceUnavailableError(
+        "Embedding service unavailable after retries."
+    ) from last_exception
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Check if an exception represents a rate limit or server error."""
+    if hasattr(exc, "code"):
+        return exc.code in (429, 500, 502, 503, 504)
+    if hasattr(exc, "status_code"):
+        return exc.status_code in (429, 500, 502, 503, 504)
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return any(
+        word in name or word in message
+        for word in ("rate", "resource", "unavailable", "timeout", "quota", "429", "503", "500", "502", "504")
+    )
+
+
+def build_store(settings: Settings, embeddings: Embeddings) -> Chroma:
+    """Return the Chroma vector store with cosine distance."""
+    return Chroma(
+        collection_name=COLLECTION_NAME,
+        embedding_function=embeddings,
+        persist_directory=settings.chroma_persist_dir,
+        collection_metadata={"hnsw:space": "cosine"},
+    )

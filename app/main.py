@@ -5,6 +5,7 @@ import time
 
 from fastapi import FastAPI, Request
 
+from app.chains import build_embeddings, build_store
 from app.config import get_settings
 from app.schemas import HealthResponse
 
@@ -46,3 +47,25 @@ def healthz() -> HealthResponse:
         chroma="ok",
         document_count=0,
     )
+
+
+_embeddings = None
+_store = None
+
+
+def get_embeddings():
+    """Return the singleton embeddings instance, building it on first use."""
+    global _embeddings
+    if _embeddings is None:
+        settings = get_settings()
+        _embeddings = build_embeddings(settings)
+    return _embeddings
+
+
+def get_store():
+    """Return the singleton vector store instance, building it on first use."""
+    global _store
+    if _store is None:
+        settings = get_settings()
+        _store = build_store(settings, get_embeddings())
+    return _store
