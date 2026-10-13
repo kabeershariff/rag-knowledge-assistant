@@ -1,11 +1,14 @@
 """Ingest, ask, list, delete, grounding and evidence."""
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from app import chains
 from app.config import Settings
+
+logger = logging.getLogger("knowledge_assistant")
 
 MAX_UPLOAD_MB = 20
 
@@ -101,4 +104,77 @@ def ingest_document(
     if not chunks:
         raise IngestError(422, "File contains no extractable text.")
 
+    # Delete old chunks from the store before adding the new version
+    store = chains.build_store(settings, chains.build_embeddings(settings))
+    store.delete(where={"document_id": document_id})
+
+    # Embed and add new chunks
+    texts = [chunk.page_content for chunk in chunks]
+    embeddings = chains.build_embeddings(settings)
+    vectors = chains.embed_with_retry(embeddings, texts, settings)
+    store.add_texts(texts=texts, metadatas=[c.metadata for c in chunks], ids=[c.metadata["chunk_id"] for c in chunks])
+
     return registry.upsert(document_id, filename, media_type, len(chunks))
+
+
+def retrieve(question: str, settings: Settings, top_k: int | None = None) -> list[dict[str, Any]]:
+    """Retrieve and gate chunks for a question.
+
+    Uses similarity_search_with_score to get raw cosine distances, converts to
+    score with score = 1 - distance, then filters with the single threshold at
+    RELEVANCE_MAX_DISTANCE. Logs the best distance on one line.
+
+    Returns a list of gated result dicts sorted by ascending distance (best first).
+    Each dict holds the chunk text, metadata, distance, and score (1 - distance).
+    """
+    if top_k is None:
+        top_k = settings.retrieval_top_k
+
+    embeddings = chains.build_embeddings(settings)
+    store = chains.build_store(settings, embeddings)
+
+    raw_results: list[tuple] = store.similarity_search_with_score(
+        query=question,
+        k=top_k,
+    )
+
+    # Chroma cosine distance: lower is better. Convert to score where higher is better.
+    gated: list[dict[str, Any]] = []
+    for doc, distance in raw_results:
+        if distance <= settings.relevance_max_distance:
+            gated.append({
+                "text": doc.page_content,
+                "metadata": doc.metadata,
+                "distance": distance,
+                "score": 1.0 - distance,
+            })
+
+    best_distance = raw_results[0][1] if raw_results else None
+    logger.info(
+        "question=%r best_distance=%.4f gated=%d/%d",
+        question[:60],
+        best_distance if best_distance is not None else -1.0,
+        len(gated),
+        len(raw_results),
+    )
+
+    return gated
+
+
+def delete_document(document_id: str, settings: Settings, registry: DocumentRegistry) -> bool:
+    """Delete a document and its chunks from the store and registry. Returns True if found."""
+    record = registry.get(document_id)
+    if record is None:
+        return False
+
+    store = chains.build_store(settings, chains.build_embeddings(settings))
+    # langchain-chroma delete() only accepts ids; use the underlying collection for metadata filter
+    store._collection.delete(where={"document_id": document_id})
+    registry.remove(document_id)
+    logger.info("deleted document_id=%s", document_id)
+    return True
+
+
+def list_documents(registry: DocumentRegistry) -> list[dict]:
+    """Return all registered documents."""
+    return registry.list()
