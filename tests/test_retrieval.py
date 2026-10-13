@@ -9,7 +9,8 @@ Whether the assistant paraphrases well is answered by the live evaluation run.
 
 import pytest
 
-from app import chains, rag
+from app import chains, documents, rag
+from app.retries import IngestError
 from app.config import UNAVAILABLE_MESSAGE
 from app.rag import Service
 
@@ -18,7 +19,7 @@ from tests.conftest import OFF_CORPUS_QUESTIONS, SAMPLE_DIR
 
 def ingest_text(text: str, filename: str, service: Service) -> int:
     """Ingest raw text as if it had been uploaded, returning the chunk count."""
-    record = rag.ingest_document(text.encode("utf-8"), filename, service)
+    record = documents.ingest_document(text.encode("utf-8"), filename, service)
     return record["chunk_count"]
 
 
@@ -153,7 +154,7 @@ def test_retrieval_requires_a_model_service(settings):
     settings.gemini_api_key = None
     bare = Service(settings=settings)
 
-    with pytest.raises(rag.IngestError) as caught:
+    with pytest.raises(IngestError) as caught:
         rag.retrieve("anything", bare)
 
     assert caught.value.status_code == 503
@@ -167,7 +168,7 @@ def test_delete_removes_every_chunk_of_a_document(corpus, store_of):
     document_id = "benefits_guide"
     assert chains.read_chunks(store_of(), where={"document_id": document_id})["ids"]
 
-    assert rag.delete_document(document_id, corpus) is True
+    assert documents.delete_document(document_id, corpus) is True
 
     assert not chains.read_chunks(store_of(), where={"document_id": document_id})["ids"]
     survivor = "employee_handbook"
@@ -177,7 +178,7 @@ def test_delete_removes_every_chunk_of_a_document(corpus, store_of):
 
 
 def test_deleting_an_unknown_document_reports_false(corpus):
-    assert rag.delete_document("no_such_document", corpus) is False
+    assert documents.delete_document("no_such_document", corpus) is False
 
 
 def test_reingesting_the_same_name_replaces_chunks_instead_of_duplicating_them(
@@ -185,8 +186,8 @@ def test_reingesting_the_same_name_replaces_chunks_instead_of_duplicating_them(
 ):
     from tests.conftest import sample_bytes
 
-    first = rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", corpus)
-    second = rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", corpus)
+    first = documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", corpus)
+    second = documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", corpus)
 
     assert first["chunk_count"] == second["chunk_count"]
     assert first["document_id"] == second["document_id"] == "benefits_guide"
@@ -195,7 +196,7 @@ def test_reingesting_the_same_name_replaces_chunks_instead_of_duplicating_them(
 
 
 def test_listing_reports_one_entry_per_document_with_its_chunk_count(corpus):
-    listed = {item["document_id"]: item for item in rag.list_documents(corpus)}
+    listed = {item["document_id"]: item for item in documents.list_documents(corpus)}
 
     assert set(listed) == {
         "employee_handbook",
@@ -209,7 +210,7 @@ def test_listing_reports_one_entry_per_document_with_its_chunk_count(corpus):
 
 
 def test_the_whole_corpus_produces_at_least_sixty_chunks(corpus):
-    total = sum(item["chunk_count"] for item in rag.list_documents(corpus))
+    total = sum(item["chunk_count"] for item in documents.list_documents(corpus))
 
     assert total >= 60
 
@@ -228,7 +229,7 @@ def test_chunks_respect_the_configured_size(corpus, store_of):
 
 def test_chunks_carry_exact_start_offsets(service, write_temp, sample_text):
     """`add_start_index` must point at the real slice of the source text."""
-    chunks = chains.load_and_split(
+    chunks = documents.load_and_split(
         write_temp(sample_text, "handbook.txt"),
         ".txt",
         service.settings,
@@ -247,7 +248,7 @@ def test_chunks_carry_exact_start_offsets(service, write_temp, sample_text):
 
 def test_consecutive_chunks_overlap_or_touch(service, write_temp, sample_text):
     """With a configured overlap, the splitter never leaves a positive gap."""
-    chunks = chains.load_and_split(
+    chunks = documents.load_and_split(
         write_temp(sample_text, "handbook.txt"),
         ".txt",
         service.settings,
@@ -267,7 +268,7 @@ def test_consecutive_chunks_overlap_or_touch(service, write_temp, sample_text):
 
 def test_overlap_is_present_between_consecutive_chunks(service, write_temp, sample_text):
     """A non-zero overlap means some tail text is repeated, not merely adjacent."""
-    chunks = chains.load_and_split(
+    chunks = documents.load_and_split(
         write_temp(sample_text, "handbook.txt"),
         ".txt",
         service.settings,
@@ -301,7 +302,7 @@ def test_chunk_identifiers_are_explicit_and_unique(corpus, store_of):
 
 
 def test_whitespace_only_chunks_are_dropped(settings, write_temp):
-    chunks = chains.load_and_split(
+    chunks = documents.load_and_split(
         write_temp("   \n\n   \t  \n", "blank.txt"),
         ".txt",
         settings,

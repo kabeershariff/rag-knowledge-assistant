@@ -308,7 +308,7 @@ def _settings_without_key():
 
 
 def test_registry_normalizes_a_filename_into_a_stable_slug():
-    from app.rag import DocumentRegistry
+    from app.documents import DocumentRegistry
 
     assert DocumentRegistry.normalize("Employee Handbook.pdf") == "employee_handbook"
     assert DocumentRegistry.normalize("benefits_guide.md") == "benefits_guide"

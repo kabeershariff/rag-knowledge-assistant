@@ -35,8 +35,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import chains, rag
-from app.config import UNAVAILABLE_MESSAGE, Settings
-from app.rag import DocumentRegistry, Service, ingest_document
+from app.config import EMBEDDING_DIMENSIONS, UNAVAILABLE_MESSAGE, Settings
+from app.documents import DocumentRegistry, ingest_document
+from app.rag import Service
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUESTIONS_PATH = REPO_ROOT / "data" / "questions.json"
@@ -617,7 +618,7 @@ def build_report(
     lines.append(f"| Answers replayed from cache | {replayed} of {len(records)} |")
     lines.append(f"| Chat model | `{settings.gemini_chat_model}` |")
     lines.append(f"| Embedding model | `{settings.gemini_embedding_model}` |")
-    lines.append(f"| Embedding dimensions | 768 |")
+    lines.append(f"| Embedding dimensions | {EMBEDDING_DIMENSIONS} |")
     lines.append(f"| Chunk size / overlap | {settings.chunk_size} / {settings.chunk_overlap} |")
     lines.append(f"| Retrieval top k | {settings.retrieval_top_k} |")
     lines.append(f"| Relevance threshold | **{threshold}** |")
@@ -717,8 +718,8 @@ def build_report(
     lines.append("")
     lines.append(
         "The multi evidence rate is reported on its own line and is not folded into "
-        f"the overall recall number, so a collapse in multi document answers cannot "
-        f"hide behind a strong answerable score."
+        "the overall recall number, so a collapse in multi document answers cannot "
+        "hide behind a strong answerable score."
     )
     lines.append("")
     lines.append("## Retrieval behaviour on unanswerable questions")

@@ -6,10 +6,10 @@ import time
 from fastapi import Depends, FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from app import rag
-from app.chains import ServiceUnavailableError
+from app import documents, rag
 from app.config import MAX_UPLOAD_BYTES, get_settings
-from app.rag import IngestError, Service
+from app.rag import Service
+from app.retries import IngestError, ServiceUnavailableError
 from app.schemas import (
     AskRequest,
     AskResponse,
@@ -85,7 +85,7 @@ def healthz(service: Service = Depends(get_service)) -> HealthResponse:
     gemini = "configured" if settings.gemini_configured else "missing"
 
     try:
-        documents = rag.list_documents(service)
+        documents_list = documents.list_documents(service)
     except Exception as exc:
         logger.warning("vector store unreachable: %s", exc)
         body = HealthResponse(
@@ -97,7 +97,7 @@ def healthz(service: Service = Depends(get_service)) -> HealthResponse:
         status="ok" if gemini == "configured" else "degraded",
         gemini=gemini,
         chroma="ok",
-        document_count=len(documents),
+        document_count=len(documents_list),
     )
 
 
@@ -113,21 +113,21 @@ def ingest_document(
 ) -> DocumentIngestResponse:
     filename = file.filename or "document"
     content = _read_upload(file)
-    record = rag.ingest_document(content, filename, service)
+    record = documents.ingest_document(content, filename, service)
     return DocumentIngestResponse(**record)
 
 
 @app.get("/api/documents", response_model=DocumentListResponse, tags=["documents"])
 def list_documents(service: Service = Depends(get_service)) -> DocumentListResponse:
-    documents = rag.list_documents(service)
-    return DocumentListResponse(documents=[DocumentSummary(**item) for item in documents])
+    listed = documents.list_documents(service)
+    return DocumentListResponse(documents=[DocumentSummary(**item) for item in listed])
 
 
 @app.delete("/api/documents/{document_id}", status_code=204, tags=["documents"])
 def delete_document(
     document_id: str, service: Service = Depends(get_service)
 ) -> Response:
-    if not rag.delete_document(document_id, service):
+    if not documents.delete_document(document_id, service):
         raise IngestError(404, f"Unknown document id {document_id!r}.")
     return Response(status_code=204)
 

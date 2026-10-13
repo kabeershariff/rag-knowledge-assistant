@@ -1,19 +1,17 @@
-"""Ingest, ask, list, delete, grounding and evidence."""
+"""The query pipeline and the dependency container every request resolves through.
 
-import json
+`Service` builds the embeddings, the store and the answer chain on first use, so
+a missing key costs a 503 rather than an import failure. Below it sit the four
+stages of an answer: retrieve, gate, generate, validate citations.
+"""
+
 import logging
-import re
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
-from langchain_core.exceptions import OutputParserException
-from pydantic import ValidationError
-
 from app import chains
-from app.config import MAX_UPLOAD_BYTES, UNAVAILABLE_MESSAGE, Settings
+from app.config import UNAVAILABLE_MESSAGE, Settings
+from app.documents import DocumentRegistry
+from app.retries import IngestError, invoke_with_retry
 
 logger = logging.getLogger("knowledge_assistant")
 
@@ -21,15 +19,6 @@ MISSING_KEY_MESSAGE = (
     "GEMINI_API_KEY is not configured. Set it in .env or in the environment and "
     "restart the service."
 )
-
-
-class IngestError(Exception):
-    """A domain error that maps to an HTTP status code."""
-
-    def __init__(self, status_code: int, detail: str):
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
 
 
 class Service:
@@ -43,7 +32,7 @@ class Service:
     def __init__(
         self,
         settings: Settings,
-        registry: "DocumentRegistry | None" = None,
+        registry: DocumentRegistry | None = None,
         embeddings: Any | None = None,
         store: Any | None = None,
         answer_chain: Any | None = None,
@@ -56,7 +45,7 @@ class Service:
         self._store_searchable = store is not None
 
     def require_gemini(self) -> None:
-        """Raise 503 when nothing was injected and no key is configured."""
+        """Raise 503 with an actionable message when nothing was injected and no key."""
         if self.embeddings is None and not self.settings.gemini_configured:
             raise IngestError(503, MISSING_KEY_MESSAGE)
 
@@ -92,103 +81,6 @@ class Service:
         if self.answer_chain is None:
             self.answer_chain = chains.build_answer_chain(self.settings)
         return self.answer_chain
-
-
-class DocumentRegistry:
-    """Tracks ingested documents by normalized filename, with replace on re-upload."""
-
-    def __init__(self) -> None:
-        self._by_id: dict[str, dict[str, Any]] = {}
-
-    @staticmethod
-    def normalize(filename: str) -> str:
-        """Return the slug used as the document identifier."""
-        stem = Path(filename).stem.lower()
-        slug = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
-        return slug or "document"
-
-    def upsert(self, document_id: str, filename: str, media_type: str, chunk_count: int) -> dict:
-        record = {
-            "document_id": document_id,
-            "filename": filename,
-            "media_type": media_type,
-            "chunk_count": chunk_count,
-        }
-        self._by_id[document_id] = record
-        return record
-
-    def get(self, document_id: str) -> dict | None:
-        return self._by_id.get(document_id)
-
-    def list(self) -> list[dict]:
-        return list(self._by_id.values())
-
-    def remove(self, document_id: str) -> bool:
-        return self._by_id.pop(document_id, None) is not None
-
-    def count(self) -> int:
-        return len(self._by_id)
-
-
-def validate_upload(filename: str, size_bytes: int) -> str:
-    """Validate extension and size, returning the media type. Raises IngestError."""
-    media_type = chains.media_type_for(filename)
-    if media_type is None:
-        raise IngestError(415, f"Unsupported file type for {filename!r}.")
-    if size_bytes > MAX_UPLOAD_BYTES:
-        raise IngestError(
-            413, f"File exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit."
-        )
-    return media_type
-
-
-def ingest_document(content: bytes, filename: str, service: Service) -> dict:
-    """Validate, load and split one uploaded file, then index it.
-
-    The file is written to a temporary path because LangChain loaders read from
-    disk. Returns the registry record for the document.
-    """
-    media_type = validate_upload(filename, len(content))
-    if not content.strip():
-        raise IngestError(422, "File contains no extractable text.")
-    service.require_gemini()
-
-    document_id = DocumentRegistry.normalize(filename)
-    extension = Path(filename).suffix.lower()
-
-    with NamedTemporaryFile(suffix=extension, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        metadata = {
-            "document_id": document_id,
-            "document_name": filename,
-            "media_type": media_type,
-        }
-        chunks = chains.load_and_split(tmp_path, extension, service.settings, metadata)
-    except Exception as exc:
-        raise IngestError(422, "File is corrupted or contains no extractable text.") from exc
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-    if not chunks:
-        raise IngestError(422, "File contains no extractable text.")
-
-    # Embed first, then delete the previous version, then add. Re-uploading a
-    # filename is still idempotent, because the delete clears the superseded
-    # chunks and the new ones carry explicit identifiers. Doing the delete last
-    # means a quota or rate limit failure while embedding leaves the already
-    # indexed version of the document intact, instead of destroying it on the way
-    # to a failure it was never going to survive.
-    store = service.get_store()
-    vectors = chains.embed_with_retry(
-        service.get_embeddings(), [chunk.page_content for chunk in chunks], service.settings
-    )
-    store.delete(where={"document_id": document_id})
-    chains.add_chunks(store, chunks, vectors)
-
-    return service.registry.upsert(document_id, filename, media_type, len(chunks))
 
 
 def retrieve(question: str, service: Service, top_k: int | None = None) -> list[dict[str, Any]]:
@@ -237,61 +129,6 @@ def retrieve(question: str, service: Service, top_k: int | None = None) -> list[
     return gated
 
 
-def documents_in_store(service: Service) -> list[dict]:
-    """Derive the document list from the collection metadata.
-
-    The index outlives the process, so it is the source of truth. The registry
-    only fills in a name for a document whose chunks carry no readable metadata.
-    """
-    store = service.get_store()
-    grouped: dict[str, dict[str, Any]] = {}
-    for metadata in chains.metadatas_of(store):
-        document_id = metadata.get("document_id")
-        if not document_id:
-            continue
-        entry = grouped.setdefault(
-            document_id,
-            {
-                "document_id": document_id,
-                "filename": metadata.get("document_name") or document_id,
-                "chunk_count": 0,
-            },
-        )
-        entry["chunk_count"] += 1
-
-    for record in service.registry.list():
-        grouped.setdefault(
-            record["document_id"],
-            {
-                "document_id": record["document_id"],
-                "filename": record["filename"],
-                "chunk_count": record["chunk_count"],
-            },
-        )
-
-    return sorted(grouped.values(), key=lambda item: item["filename"])
-
-
-def delete_document(document_id: str, service: Service) -> bool:
-    """Delete a document and its chunks. Returns False when the id is unknown."""
-    store = service.get_store()
-    if not chains.has_chunks(store, document_id):
-        service.registry.remove(document_id)
-        return False
-
-    # Delete forwards keyword arguments to the collection, so the metadata filter
-    # removes every chunk of the document in one call.
-    store.delete(where={"document_id": document_id})
-    service.registry.remove(document_id)
-    logger.info("deleted document_id=%s", document_id)
-    return True
-
-
-def list_documents(service: Service) -> list[dict]:
-    """Return every ingested document with its chunk count."""
-    return documents_in_store(service)
-
-
 def ask(question: str, service: Service, top_k: int | None = None) -> dict:
     """Retrieve, gate, generate and validate an answer.
 
@@ -310,7 +147,11 @@ def ask(question: str, service: Service, top_k: int | None = None) -> dict:
         }
 
     context_blocks = _format_context_blocks(gated)
-    result = _invoke_answer_chain(service, context_blocks, question)
+    result = invoke_with_retry(
+        service.get_answer_chain(),
+        {"context_blocks": context_blocks, "question": question},
+        service.settings,
+    )
 
     valid_citations = [c for c in result.citations if 1 <= c <= len(gated)]
     answerable = result.answerable and len(valid_citations) > 0
@@ -329,56 +170,6 @@ def ask(question: str, service: Service, top_k: int | None = None) -> dict:
         "evidence_count": len(valid_citations),
         "distinct_document_count": len({s["document_id"] for s in sources}),
     }
-
-
-def _invoke_answer_chain(service: Service, context_blocks: str, question: str) -> Any:
-    """Call the answer runnable, retrying with backoff, then classify the failure.
-
-    A parse or validation failure is a malformed model answer and becomes 502.
-    Anything else is the model service being unreachable and becomes 503.
-    """
-    chain = service.get_answer_chain()
-    payload = {"context_blocks": context_blocks, "question": question}
-    last_exc: Exception | None = None
-
-    for attempt in range(service.settings.api_max_retries + 1):
-        try:
-            return chain.invoke(payload)
-        except Exception as exc:
-            last_exc = exc
-            if attempt < service.settings.api_max_retries:
-                time.sleep(2 ** attempt)
-
-    if _is_malformed_output(last_exc):
-        raise IngestError(502, "Model returned malformed output after retry.") from last_exc
-    raise chains.ServiceUnavailableError("Model service unavailable after retries.") from last_exc
-
-
-MALFORMED_OUTPUT_MARKERS = (
-    "output parsing",
-    "could not parse",
-    "failed to parse",
-    "could not decode",
-    "structured output",
-    "json",
-    "schema",
-)
-
-
-def _is_malformed_output(exc: Exception | None) -> bool:
-    """Tell a bad model answer apart from an unreachable model service.
-
-    Anything unrecognized counts as a service problem, because retrying a service
-    problem is useful while reporting one as a bad answer would hide an outage.
-    """
-    if exc is None:
-        return False
-    if isinstance(exc, (OutputParserException, ValidationError, json.JSONDecodeError)):
-        return True
-    if type(exc).__name__ in {"OutputParserException", "ValidationError"}:
-        return True
-    message = str(exc).lower()
-    return any(marker in message for marker in MALFORMED_OUTPUT_MARKERS)
 
 
 def _is_abstention(text: str) -> bool:

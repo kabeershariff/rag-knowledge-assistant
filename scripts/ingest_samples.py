@@ -11,7 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import get_settings
-from app.rag import DocumentRegistry, Service, ingest_document
+from app.documents import DocumentRegistry, ingest_document
+from app.rag import Service
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "documents"
 

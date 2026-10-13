@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import RunnableLambda
 
-from app import chains, rag
+from app import chains, documents
 from app.chains import Answer
 from app.config import Settings
 from app.main import app, get_service
@@ -200,7 +200,7 @@ def client(service: Service):
 def corpus(service: Service) -> Service:
     """A service with all four sample documents ingested."""
     for filename in SAMPLE_FILENAMES:
-        rag.ingest_document(sample_bytes(filename), filename, service)
+        documents.ingest_document(sample_bytes(filename), filename, service)
     return service
 
 
@@ -254,11 +254,12 @@ def verbatim_query(chunk_reader):
 def no_sleep(monkeypatch):
     """Remove retry backoff sleeps so failure paths cost no wall clock time.
 
-    Only the sleeping is removed. The retry count and the ordering of attempts
-    are still asserted, which is what the retry logic is actually responsible for.
+    Both retry loops live in `app.retries`, so patching it there covers ingestion
+    and generation together. Only the sleeping is removed. The retry count and the
+    ordering of attempts are still asserted, which is what the retry logic is
+    actually responsible for.
     """
-    monkeypatch.setattr("app.rag.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("app.chains.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("app.retries.time.sleep", lambda seconds: None)
 
 
 @pytest.fixture

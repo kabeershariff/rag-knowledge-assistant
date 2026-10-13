@@ -13,11 +13,12 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableLambda
 from pydantic import ValidationError
 
-from app import chains, rag
-from app.chains import Answer, ServiceUnavailableError
+from app import chains, documents, rag
+from app.chains import Answer
 from app.config import MAX_OUTPUT_TOKENS, UNAVAILABLE_MESSAGE, Settings
 from app.main import app, get_service
-from app.rag import IngestError, Service
+from app.rag import Service
+from app.retries import IngestError, ServiceUnavailableError
 
 from tests.conftest import StubAnswer, sample_bytes
 
@@ -108,22 +109,22 @@ def test_a_failed_reingest_keeps_the_previously_indexed_version(
     the failure would leave the document absent rather than stale.
     """
     name = "it_security_policy.txt"
-    rag.ingest_document(sample_bytes(name), name, service)
-    before_registry = rag.list_documents(service)
-    before_chunks = chunk_reader(rag.DocumentRegistry.normalize(name))
+    documents.ingest_document(sample_bytes(name), name, service)
+    before_registry = documents.list_documents(service)
+    before_chunks = chunk_reader(documents.DocumentRegistry.normalize(name))
     assert before_chunks
 
     def quota_exhausted(*args, **kwargs):
         raise ServiceUnavailableError("Embedding quota exhausted for the day.")
 
-    monkeypatch.setattr(chains, "embed_with_retry", quota_exhausted)
+    monkeypatch.setattr(documents, "embed_with_retry", quota_exhausted)
 
     with pytest.raises(ServiceUnavailableError):
-        rag.ingest_document(sample_bytes(name), name, service)
+        documents.ingest_document(sample_bytes(name), name, service)
 
     monkeypatch.undo()
-    document_id = rag.DocumentRegistry.normalize(name)
-    assert rag.list_documents(service) == before_registry
+    document_id = documents.DocumentRegistry.normalize(name)
+    assert documents.list_documents(service) == before_registry
     assert chunk_reader(document_id) == before_chunks
     assert rag.retrieve(verbatim_query(document_id, 0), service)
 
@@ -165,7 +166,7 @@ def test_model_timeout_is_reported_as_a_service_outage(
     service.answer_chain = StubAnswer(
         fail_with=TimeoutError("model call timed out"), failures=99
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with pytest.raises(ServiceUnavailableError):
         rag.ask(answerable_question("benefits_guide", 7), service)
@@ -178,7 +179,7 @@ def test_every_retry_attempt_is_used_before_giving_up(
     settings.api_max_retries = 2
     flaky = StubAnswer(fail_with=TimeoutError("timeout"), failures=99)
     service.answer_chain = flaky.runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with pytest.raises(ServiceUnavailableError):
         rag.ask(answerable_question("benefits_guide", 7), service)
@@ -195,7 +196,7 @@ def test_a_transient_failure_recovers_within_the_retry_budget(
         answer="Recovered [1].", citations=(1,), fail_with=TimeoutError("blip"), failures=1
     )
     service.answer_chain = flaky.runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -209,7 +210,7 @@ def test_model_outage_through_the_api_returns_503(
 ):
     settings.api_max_retries = 0
     service.answer_chain = StubAnswer(fail_with=TimeoutError("timeout"), failures=99).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with client_for(service) as client:
         response = client.post(
@@ -226,7 +227,7 @@ def test_an_unrecognized_error_is_treated_as_a_service_problem(
     """A surprise exception must not be mislabelled as a bad answer."""
     settings.api_max_retries = 0
     service.answer_chain = StubAnswer(fail_with=KeyError("unexpected"), failures=99).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with pytest.raises(ServiceUnavailableError):
         rag.ask(answerable_question("benefits_guide", 7), service)
@@ -244,7 +245,7 @@ def test_malformed_output_is_retried_then_reported_as_502(
         fail_with=OutputParserException("could not parse the JSON"), failures=99
     )
     service.answer_chain = broken.runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with pytest.raises(IngestError) as caught:
         rag.ask(answerable_question("benefits_guide", 7), service)
@@ -261,7 +262,7 @@ def test_a_schema_violation_is_treated_as_malformed_output(
         fail_with=ValidationError.from_exception_data("Answer", []), failures=99
     )
     service.answer_chain = invalid.runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with pytest.raises(IngestError) as caught:
         rag.ask(answerable_question("benefits_guide", 7), service)
@@ -276,7 +277,7 @@ def test_malformed_output_through_the_api_returns_502(
     service.answer_chain = StubAnswer(
         fail_with=OutputParserException("bad json"), failures=99
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     with client_for(service) as client:
         response = client.post(
@@ -297,7 +298,7 @@ def test_malformed_output_recovers_on_a_later_attempt(
         failures=1,
     )
     service.answer_chain = broken.runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -317,7 +318,7 @@ def test_embedding_failure_maps_to_a_service_outage(
     )
 
     with pytest.raises(ServiceUnavailableError):
-        rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+        documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
 
 def test_embedding_is_retried_before_giving_up(service, settings, embeddings, no_sleep):
@@ -334,7 +335,7 @@ def test_embedding_is_retried_before_giving_up(service, settings, embeddings, no
 
     embeddings.embed_documents = flaky
 
-    record = rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    record = documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     assert attempts["n"] == 2, "the first failure must be retried"
     assert record["chunk_count"] >= 12
@@ -348,7 +349,7 @@ def test_a_citation_outside_the_retrieved_set_never_becomes_evidence(
 ):
     """A hallucinated block number is dropped rather than looked up."""
     service.answer_chain = StubAnswer(answer="Answer [1] [9].", citations=(1, 9)).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -363,7 +364,7 @@ def test_an_answer_with_zero_valid_citations_is_demoted_to_unavailable(
     service.answer_chain = StubAnswer(
         answer="A confident but uncited claim.", citations=(99,)
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -380,7 +381,7 @@ def test_abstention_wording_is_normalised_to_the_canonical_message(
     service.answer_chain = StubAnswer(
         answer="UNAVAILABLE: not in the documents.", citations=(1,)
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -392,7 +393,7 @@ def test_a_well_formed_grounded_answer_survives_unchanged(service, answerable_qu
     service.answer_chain = StubAnswer(
         answer="Sixteen weeks of paid leave [1].", citations=(1,)
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(answerable_question("benefits_guide", 7), service)
 
@@ -406,7 +407,7 @@ def test_the_gate_short_circuits_before_a_crashing_chain(service):
     service.answer_chain = StubAnswer(
         fail_with=AssertionError("the model must not be called"), failures=99
     ).runnable()
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask(OFF_CORPUS, service)
 
@@ -547,7 +548,7 @@ def test_live_model_answers_with_evidence():
 
     settings = Settings()
     service = Service(settings=settings)
-    rag.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
+    documents.ingest_document(sample_bytes("benefits_guide.md"), "benefits_guide.md", service)
 
     result = rag.ask("What is the parental leave entitlement?", service)
 
