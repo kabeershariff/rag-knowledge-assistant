@@ -43,24 +43,6 @@ DEFAULT_PACE_SECONDS = 13.0
 # a paid tier and cannot clear a free tier retry delay of forty seconds or more.
 QUOTA_BACKOFF_SECONDS = [25, 45, 90, 150]
 
-CALIBRATION_REASON = """
-The chosen value is **0.33**. Below 0.32 the gate rejects one multi evidence
-question outright, because the best matching chunk sits at a distance of 0.3204
-and is dropped. At 0.32 multi evidence recovers but one question is still lost to
-the gate, and one unanswerable question stays unrejected. At 0.33 every multi
-evidence question keeps both gold documents while the gate still rejects four of
-the ten unanswerable questions before any model call. The remaining six unanswerable
-questions are stopped by the prompt and the citation rules, and all ten still return
-the canonical unavailable message.
-
-Above 0.33 the numbers do not improve. By 0.38 the gate rejects nothing at all, so
-every unanswerable question reaches the model and the deterministic layer stops
-protecting anything. 0.33 therefore sits at the point where the gate does the most
-work it can without costing a multi evidence question.
-
-The threshold is recorded as `RELEVANCE_MAX_DISTANCE` and is the default in
-`app/config.py`.
-"""
 SWEEP_THRESHOLDS = [0.28, 0.29, 0.30, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.38, 0.40]
 
 # Free tier rate limits are per minute and per day, so the runner paces every model
@@ -294,51 +276,160 @@ def run_sweep(service: Service, questions: list[dict], pacer: Pacer) -> list[dic
     return observations
 
 
-def sweep_table(observations: list[dict]) -> str:
+def sweep_counts(observations: list[dict], threshold: float) -> dict:
+    """Count what one candidate threshold keeps and what it stops.
+
+    "Stopped by gate" means no chunk survived the threshold, which is the
+    condition that makes abstention free. "Keeping both gold docs" means both gold
+    documents remain in the gated set, which is the ceiling for the multi evidence
+    rate.
+    """
+    counts = {
+        "stopped": 0,
+        "unanswerable": 0,
+        "both_docs": 0,
+        "multi": 0,
+        "gold_kept": 0,
+        "answerable": 0,
+        "gated": 0,
+    }
+    for observation in observations:
+        kept = [
+            item for item in observation["results"]
+            if item["distance"] <= threshold
+        ]
+        documents = {item["document_name"] for item in kept}
+        gold = set(observation["gold_document_names"])
+        counts["gated"] += len(kept)
+
+        if observation["category"] == "unanswerable":
+            counts["unanswerable"] += 1
+            counts["stopped"] += 0 if kept else 1
+        elif observation["category"] == "multi_evidence":
+            counts["multi"] += 1
+            counts["both_docs"] += 1 if gold and gold <= documents else 0
+        elif observation["category"] == "answerable":
+            counts["answerable"] += 1
+            counts["gold_kept"] += 1 if gold & documents else 0
+    return counts
+
+
+def sweep_rows(observations: list[dict]) -> list[tuple[float, dict]]:
+    """Measure every candidate threshold once, so the table and the prose agree."""
+    return [(threshold, sweep_counts(observations, threshold)) for threshold in SWEEP_THRESHOLDS]
+
+
+def select_threshold(rows: list[tuple[float, dict]]) -> float:
+    """Apply a stated rule to the measured rows and return the threshold it picks.
+
+    The rule: the lowest candidate that keeps every multi evidence question whole,
+    because losing one caps that category below its target. Ties go to the
+    threshold that stops the most unanswerable questions, then to the one that
+    keeps the most answerable gold documents.
+    """
+    qualifying = [
+        row for row in rows
+        if row[1]["multi"] and row[1]["both_docs"] == row[1]["multi"]
+    ]
+    if not qualifying:
+        return SWEEP_THRESHOLDS[-1]
+    return min(
+        qualifying, key=lambda row: (row[0], -row[1]["stopped"], -row[1]["gold_kept"])
+    )[0]
+
+
+def sweep_table(rows: list[tuple[float, dict]]) -> str:
     """Report, per candidate threshold, gate behaviour for each category."""
     lines = [
         "| Threshold | Unanswerable stopped by gate | Multi evidence keeping both gold docs | "
         "Answerable keeping gold doc | Gated chunks (avg) |",
         "|---|---|---|---|---|",
     ]
-    for threshold in SWEEP_THRESHOLDS:
-        stopped = 0
-        unanswerable = 0
-        both_docs = 0
-        multi = 0
-        gold_kept = 0
-        answerable = 0
-        total_gated = 0
-        total_questions = 0
-
-        for observation in observations:
-            kept = [
-                item for item in observation["results"]
-                if item["distance"] <= threshold
-            ]
-            documents = {item["document_name"] for item in kept}
-            gold = set(observation["gold_document_names"])
-            total_gated += len(kept)
-            total_questions += 1
-
-            if observation["category"] == "unanswerable":
-                unanswerable += 1
-                if not kept:
-                    stopped += 1
-            elif observation["category"] == "multi_evidence":
-                multi += 1
-                if gold and gold <= documents:
-                    both_docs += 1
-            elif observation["category"] == "answerable":
-                answerable += 1
-                if gold & documents:
-                    gold_kept += 1
-
+    for threshold, counts in rows:
+        average = counts["gated"] / max(counts["multi"] + counts["answerable"] + counts["unanswerable"], 1)
         lines.append(
-            f"| {threshold:.2f} | {stopped}/{unanswerable} | {both_docs}/{multi} | "
-            f"{gold_kept}/{answerable} | {total_gated / total_questions:.2f} |"
+            f"| {threshold:.2f} | {counts['stopped']}/{counts['unanswerable']} | "
+            f"{counts['both_docs']}/{counts['multi']} | "
+            f"{counts['gold_kept']}/{counts['answerable']} | {average:.2f} |"
         )
     return "\n".join(lines)
+
+
+def sweep_selection_note(rows: list[tuple[float, dict]], chosen: float) -> str:
+    """State the chosen threshold in words derived from the same rows.
+
+    Every number here is read back out of the table, so this cannot drift from it
+    the way hand written calibration prose did.
+    """
+    picked = dict(rows)[chosen]
+    lower = [row for row in rows if row[0] < chosen]
+    higher = [row for row in rows if row[0] > chosen]
+
+    sentences = [
+        f"The chosen value is **{chosen:.2f}**: the lowest candidate that keeps every "
+        f"multi evidence question whole ({picked['both_docs']}/{picked['multi']}), and at "
+        f"that point it still stops {picked['stopped']} of the {picked['unanswerable']} "
+        f"unanswerable questions before any model call."
+    ]
+
+    if lower:
+        best_below = max(lower, key=lambda row: (row[1]["both_docs"], row[0]))
+        lost = best_below[1]["multi"] - best_below[1]["both_docs"]
+        if lost:
+            sentences.append(
+                f"Every threshold below {chosen:.2f} costs at least one multi evidence "
+                f"question; the best of them, {best_below[0]:.2f}, keeps "
+                f"{best_below[1]['both_docs']} of {best_below[1]['multi']}."
+            )
+        else:
+            sentences.append(
+                f"No threshold below {chosen:.2f} keeps more multi evidence questions, so "
+                f"{chosen:.2f} is preferred only because it is lower and therefore stricter."
+            )
+
+    if higher:
+        best_above = max(higher, key=lambda row: row[1]["stopped"])
+        if best_above[1]["stopped"] <= picked["stopped"]:
+            sentences.append(
+                f"No threshold above {chosen:.2f} stops more unanswerable questions than "
+                f"{picked['stopped']} of {picked['unanswerable']}, so raising the gate buys "
+                f"nothing and only widens the context sent to the model."
+            )
+        else:
+            sentences.append(
+                f"{best_above[0]:.2f} stops {best_above[1]['stopped']} of "
+                f"{best_above[1]['unanswerable']} unanswerable questions, more than "
+                f"{chosen:.2f}."
+            )
+
+    sentences.append(
+        "The overlap is the honest finding: score distributions for answerable and "
+        "unanswerable questions are not separable, so abstention is carried by the "
+        "prompt and the citation rules as much as by the gate."
+    )
+    return "\n\n".join(sentences)
+
+
+def sweep_report(observations: list[dict]) -> str:
+    """Write the whole calibration artifact, so no line of it is hand authored."""
+    rows = sweep_rows(observations)
+    chosen = select_threshold(rows)
+    return "\n".join([
+        "Threshold calibration sweep, generated by scripts/run_eval.py --sweep.",
+        "Edit the tool, not this file.",
+        "",
+        "Each candidate threshold was applied to the cosine distances measured once per",
+        "question. No generation model was called, so a sweep costs one embedding",
+        'request per question. "Stopped by gate" counts unanswerable questions where no',
+        "chunk survives the threshold. \"Keeping both gold docs\" counts multi evidence",
+        "questions where both gold documents remain in the gated set, which is the",
+        "ceiling for the multi evidence rate.",
+        "",
+        sweep_table(rows),
+        "",
+        sweep_selection_note(rows, chosen),
+        "",
+    ])
 
 
 def run_evaluation(
@@ -414,7 +505,6 @@ def build_report(
     threshold: float,
     started_at: datetime,
     calibration_table: str | None,
-    calibration_reason: str | None,
 ) -> str:
     by_category: dict[str, list[Record]] = {}
     for record in records:
@@ -562,17 +652,13 @@ def build_report(
         lines.append("## Threshold calibration")
         lines.append("")
         lines.append(
-            "The threshold was chosen from a retrieval only sweep. Each candidate "
-            "threshold was applied to the cached distances for all thirty questions, "
-            "so the trade off could be read directly without spending model calls. No "
-            "generation happens in the sweep."
+            "Reproduced below in full from the retrieval only sweep, which spends no "
+            "generation calls. Every line of it, including the wording of the choice, is "
+            "generated by `scripts/run_eval.py --sweep` from the measured distances."
         )
         lines.append("")
         lines.append(calibration_table)
         lines.append("")
-        if calibration_reason:
-            lines.append(calibration_reason)
-            lines.append("")
     lines.append("## Per question detail")
     lines.append("")
     lines.append(
@@ -684,11 +770,11 @@ def main() -> int:
         if args.sweep:
             print("sweeping retrieval for threshold calibration")
             observations = run_sweep(service, questions, pacer)
-            table = sweep_table(observations)
+            report = sweep_report(observations)
             print()
-            print(table)
+            print(report)
             if args.sweep_output:
-                args.sweep_output.write_text(table + "\n", encoding="utf-8")
+                args.sweep_output.write_text(report, encoding="utf-8")
             return 0
 
         print(f"running {len(questions)} questions at threshold {threshold}")
@@ -709,7 +795,6 @@ def main() -> int:
             threshold,
             started_at,
             args.calibration.read_text(encoding="utf-8").strip() if args.calibration else None,
-            CALIBRATION_REASON.strip() if args.calibration else None,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")

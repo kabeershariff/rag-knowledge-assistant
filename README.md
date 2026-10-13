@@ -21,7 +21,7 @@ model is ever called, not by asking the model nicely.
 7. [Evaluation](#evaluation)
 8. [Testing](#testing)
 9. [Limitations](#limitations)
-10. [Deliverables map](#deliverables-map)
+10. [Deliverables](#deliverables)
 
 ---
 
@@ -137,7 +137,9 @@ The service starts on <http://localhost:8000>. Interactive documentation is at
 ## Configuration
 
 Settings load once through `pydantic-settings` from the environment and from
-`.env`. Every variable appears in `.env.example`.
+`.env`. Every variable the application reads appears in `.env.example`. Unknown
+variables are ignored rather than rejected, so an extra line in `.env` cannot
+stop the service from starting.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -151,9 +153,8 @@ Settings load once through `pydantic-settings` from the environment and from
 | `RELEVANCE_MAX_DISTANCE` | No | `0.33` | Relevance gate threshold and evidence admission. |
 | `LLM_TEMPERATURE` | No | `0.0` | Zero keeps evaluation runs repeatable. |
 | `API_MAX_RETRIES` | No | `3` | Retries on rate limit and server errors, backing off 1, 2 then 4 seconds. |
-| `HOST` | No | `0.0.0.0` | Uvicorn binding. |
-| `PORT` | No | `8000` | Uvicorn binding. |
-| `LANGSMITH_TRACING` | No | `false` | No call data leaves the machine. |
+| `HOST` | No | `0.0.0.0` | Uvicorn bind address, read by the container entrypoint. |
+| `PORT` | No | `8000` | Uvicorn port, read by the container entrypoint. |
 
 **Fixed constants.** These are not environment variables, because each knob is
 one more thing to misconfigure and nothing here needs tuning:
@@ -166,6 +167,13 @@ one more thing to misconfigure and nothing here needs tuning:
 | Maximum output tokens | 1024 |
 | Per request timeout | 30 seconds |
 | Unavailable message | `The requested information is unavailable in the provided documents.` |
+
+**`LANGSMITH_TRACING` is not a setting.** It is not a `Settings` field, so this
+application never reads it and `.env` cannot change it. It is pinned to `false`
+in the `Dockerfile` only so that any transitive LangSmith auto-instrumentation
+stays off inside the image. It says nothing about where queries go: asking a
+question sends the question text to Google's embedding API. Nothing is retained
+on the local machine, and nothing is sent anywhere else.
 
 **A missing key does not stop the service.** `/healthz` reports `degraded`, and
 the endpoints that need Gemini return 503 with an actionable message. Listing,
@@ -303,34 +311,65 @@ Four details in that response matter more than they look:
 - **For PDFs, offsets are relative to the page text, not the whole file.** Each
   page is split independently, so the location always reports the page number
   alongside the offsets. For TXT and Markdown there is no `page_number` field.
-- **`retrieved_count` can be positive while `sources` is empty.** That is the
-  correct shape for a refused question, not a bug. Retrieval ran and returned
-  nearby chunks, the gate rejected all of them, and the model was never called.
+- **A refused question can return evidence.** `answerable` is false and the answer
+  is the canonical message, but `sources` still lists the chunks that were
+  retrieved and then rejected. Suppressed-but-present evidence is the more useful
+  signal to a caller than a silent empty list, so it is returned deliberately.
+  `evidence_count` counts only the citations the model made that survived
+  validation, so it can be `0` while `sources` is populated.
 
 ### When the answer is not available
+
+There are exactly two shapes, and they are not the same thing.
+
+**Case 1 — the gate stopped the question.** No chunk was at or below the
+threshold, so the model was never called. Every count is zero:
 
 ```json
 {
   "answer": "The requested information is unavailable in the provided documents.",
   "answerable": false,
   "sources": [],
-  "retrieved_count": 2,
+  "retrieved_count": 0,
   "evidence_count": 0,
   "distinct_document_count": 0,
   "model": "gemini-3.1-flash-lite",
-  "latency_ms": 4.1
+  "latency_ms": 2.2
 }
 ```
 
-The `answer`, `answerable` and `sources` values above are the contract, not an
-example of it: the message is fixed, the flag is always false and the source
-list is always empty. `retrieved_count` and `latency_ms` vary per question, and
-the values shown are illustrative. A `retrieved_count` of zero means the gate
-stopped the question outright; a higher count means chunks were returned, the
-gate rejected them, and the model still declined to invent an answer.
+Only `latency_ms` varies. This is question `u03` in the recorded evaluation run
+([`docs/evaluation_results.md`](docs/evaluation_results.md)).
 
-That sentence is a constant in `app/config.py`, not something the model
-produced. It is the same string whether the model abstained, the gate rejected
+**Case 2 — the model declined, or its citations did not validate.** The gate let
+chunks through, the model ran, and the answer was refused. `answer` and
+`answerable` are identical to case 1, but the counts are not:
+
+| Field | Case 2 |
+|---|---|
+| `answer` | The canonical message. A constant in `app/config.py`, not model output. |
+| `answerable` | `false`. |
+| `sources` | The retrieved-but-rejected chunks, if the model cited any that validated. May be populated. |
+| `retrieved_count` | Chunks that passed the gate. Greater than zero. |
+| `evidence_count` | Citations the model made that were in range. Often `0`, because a declining model cites nothing. |
+| `distinct_document_count` | Distinct documents in `sources`. |
+
+Recorded examples from the same run: `u02` returned `answerable: false` with two
+gated chunks and one cited document, `u06` and `u09` returned one gated chunk and
+one cited document each, and `m10` abstained with eight gated chunks in context.
+The table above is the contract; the counts on those four rows are the recorded
+values.
+
+The contract, stated once: **`answer` is the canonical message and `answerable`
+is `false` whenever the service refuses. `sources` is populated only when chunks
+were retrieved, and its emptiness is not by itself a statement about the gate.**
+
+A `retrieved_count` of zero always means the gate stopped the question outright,
+because that is the only code path that returns it. A positive `retrieved_count`
+with `answerable: false` means the model and the citation rules carried the
+refusal.
+
+That message is the same string whether the model abstained, the gate rejected
 everything, the key was missing, or the quota was spent.
 
 ---
@@ -582,29 +621,19 @@ half of the behaviour.
 
 ### The calibrated threshold
 
-`RELEVANCE_MAX_DISTANCE` is set to **0.33**, chosen from a retrieval only sweep
-that spent no model calls. Each candidate was applied to cached cosine distances
-for all thirty questions.
+`RELEVANCE_MAX_DISTANCE` is set to **0.33**, chosen by a stated rule applied to a
+retrieval only sweep that spent no generation calls: the lowest threshold that
+keeps every multi evidence question whole, because losing one caps that category
+below its 70 percent target. At 0.33 that costs 4 of the 10 unanswerable
+questions being stopped by the gate instead of more.
 
-| Threshold | Unanswerable stopped by gate | Multi evidence keeping both gold docs |
-|---|---|---|
-| 0.30 | 9/10 | 7/10 |
-| 0.32 | 6/10 | 9/10 |
-| **0.33** | **4/10** | **10/10** |
-| 0.35 | 3/10 | 10/10 |
-| 0.38 | 0/10 | 10/10 |
-
-Below 0.32 the gate rejects one multi evidence question outright, because its
-best matching chunk sits at a distance of 0.3204. Above 0.33 nothing improves,
-and by 0.38 the gate rejects nothing at all, so every unanswerable question
-reaches the model and the deterministic layer stops protecting anything. 0.33 is
-the point where the gate does the most work it can without costing a multi
-evidence question.
-
-You can reproduce the sweep without spending quota:
+The full table, the rule and the reasoning are in
+[`docs/calibration_sweep.txt`](docs/calibration_sweep.txt). Every line of that
+file, prose included, is generated by the tool — which is why it is not copied
+here. It can be regenerated for the cost of one embedding request per question:
 
 ```bash
-python scripts/run_eval.py --sweep
+python scripts/run_eval.py --sweep --sweep-output docs/calibration_sweep.txt
 ```
 
 ---
@@ -689,12 +718,13 @@ python -m pytest -q --basetemp ./.pytest-tmp
 
 ---
 
-## Deliverables map
+## Deliverables
 
-| Deliverable | File |
+This document is itself deliverable D2, so it is not listed here.
+
+| Deliverable | Where it is |
 |---|---|
-| D1 Git repository | This repository, 10 commits |
-| D2 README with setup and decisions | [`README.md`](README.md), this file |
+| D1 Git repository | [github.com/kabeershariff/rag-knowledge-assistant](https://github.com/kabeershariff/rag-knowledge-assistant) |
 | D3a Sample documents | [`data/documents/`](data/documents), 4 files, 68 chunks at default settings |
 | D3b Evaluation questions | [`data/questions.json`](data/questions.json), 30 questions |
 | D4a Automated test results | [`docs/test_results.md`](docs/test_results.md) |
@@ -702,10 +732,4 @@ python -m pytest -q --basetemp ./.pytest-tmp
 | D4c Limitations | [Limitations](#limitations), above |
 | D5 Docker | [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml), [`.dockerignore`](.dockerignore) |
 | D6 Working notes excluded | [`.gitignore`](.gitignore) |
-| Application | [`app/`](app), 5 modules |
-| Sample PDF generator | [`scripts/make_sample_pdfs.py`](scripts/make_sample_pdfs.py) |
-| Evaluation runner | [`scripts/run_eval.py`](scripts/run_eval.py) |
-| Ingest script | [`scripts/ingest_samples.py`](scripts/ingest_samples.py) |
-| Tests | [`tests/`](tests), 3 suites |
-| Dependencies | [`requirements.txt`](requirements.txt), [`requirements-dev.txt`](requirements-dev.txt) |
-| Configuration template | [`.env.example`](.env.example) |
+| Threshold calibration | [`docs/calibration_sweep.txt`](docs/calibration_sweep.txt) |

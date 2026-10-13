@@ -493,21 +493,25 @@ def test_the_chain_returns_the_validated_answer_schema(settings):
     assert result.citations == [1]
 
 
-def test_temperature_and_token_ceiling_come_from_settings(settings):
+def test_temperature_and_token_ceiling_come_from_settings(settings, monkeypatch):
     """Generation stays repeatable, which the evaluation depends on."""
     built: list[dict] = []
 
-    class Capturing(RecordingModel):
-        def __init__(self, **kwargs):
-            super().__init__()
-            built.append(kwargs)
+    def capture(**kwargs):
+        built.append(kwargs)
+        return RecordingModel()
 
-    chains.build_answer_chain(settings, model=Capturing())
+    monkeypatch.setattr(chains, "ChatGoogleGenerativeAI", capture)
 
-    # The default model is only constructed when none is injected, so the settings
-    # are asserted directly against the values the factory would pass on.
-    assert settings.llm_temperature == 0.0
-    assert MAX_OUTPUT_TOKENS == 1024
+    chains.build_answer_chain(settings, model=None)
+
+    # Assert on what the factory actually passed, not on the constants themselves.
+    assert len(built) == 1
+    assert built[0]["temperature"] == 0.0 == settings.llm_temperature
+    assert built[0]["max_tokens"] == MAX_OUTPUT_TOKENS == 1024
+    assert built[0]["model"] == settings.gemini_chat_model
+    assert built[0]["max_retries"] == settings.api_max_retries
+    assert built[0]["google_api_key"] == settings.gemini_api_key
 
 
 def test_health_reports_the_store_as_unavailable_when_chroma_fails(settings, corpus, monkeypatch):

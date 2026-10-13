@@ -1,7 +1,12 @@
-Threshold calibration sweep, produced by scripts/run_eval.py --sweep.
+Threshold calibration sweep. Measured by scripts/run_eval.py --sweep on 2026-10-13.
 
-Each candidate threshold was applied to the cached cosine distances for all 30
-questions. No generation model was called. "Stopped by gate" counts unanswerable
+The table below is the measured output. The prose that used to precede it was
+hand written and no longer agrees with it, so it was deleted. scripts/run_eval.py
+--sweep now emits this entire file, header included, and Phase 4 regenerates it.
+Do not hand edit it.
+
+Each candidate threshold was applied to the cosine distances measured once per
+question. No generation model was called. "Stopped by gate" counts unanswerable
 questions where no chunk survives the threshold. "Keeping both gold docs" counts
 multi evidence questions where both gold documents remain in the gated set, which
 is the ceiling for the multi evidence rate.

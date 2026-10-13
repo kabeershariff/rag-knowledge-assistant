@@ -8,6 +8,7 @@ data/chroma/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 .venv/
@@ -22,5 +23,6 @@ venv/
 build.md
 for_me.txt
 simplify_build.md
+update_build.md
 task.txt
 *.bak

@@ -4,6 +4,7 @@ venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 
@@ -24,6 +25,7 @@ build.md
 *.bak
 for_me.txt
 simplify_build.md
+update_build.md
 task.txt
 
 # not needed at run time

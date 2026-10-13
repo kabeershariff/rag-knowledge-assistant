@@ -62,22 +62,9 @@ is the ceiling for the multi evidence rate.
 | 0.38 | 0/10 | 10/10 | 10/10 | 6.30 |
 | 0.40 | 0/10 | 10/10 | 10/10 | 6.97 |
 
-The chosen value is **0.33**. Below 0.32 the gate rejects one multi evidence
-question outright, because the best matching chunk sits at a distance of 0.3204
-and is dropped. At 0.32 multi evidence recovers but one question is still lost to
-the gate, and one unanswerable question stays unrejected. At 0.33 every multi
-evidence question keeps both gold documents while the gate still rejects four of
-the ten unanswerable questions before any model call. The remaining six unanswerable
-questions are stopped by the prompt and the citation rules, and all ten still return
-the canonical unavailable message.
-
-Above 0.33 the numbers do not improve. By 0.38 the gate rejects nothing at all, so
-every unanswerable question reaches the model and the deterministic layer stops
-protecting anything. 0.33 therefore sits at the point where the gate does the most
-work it can without costing a multi evidence question.
-
-The threshold is recorded as `RELEVANCE_MAX_DISTANCE` and is the default in
-`app/config.py`.
+The prose that used to follow this table was hand written and contradicted it, so it
+was removed rather than corrected. The generated reasoning lives in
+`docs/calibration_sweep.txt`, which `scripts/run_eval.py --sweep` emits in full.
 
 ## Per question detail
 
