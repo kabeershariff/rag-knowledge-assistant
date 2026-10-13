@@ -1,14 +1,11 @@
 # RAG API knowledge assistant
 
-A retrieval augmented generation service that answers questions about a set of
-documents and shows its work. Every answer carries the source document, the
-exact location of the supporting text and a verbatim excerpt, and the service
-says so plainly when the answer is not in the documents at all.
-
-The system is deliberately strict about one thing: it would rather return
-`The requested information is unavailable in the provided documents.` than
-invent a plausible answer. That property is enforced by code before the language
-model is ever called, not by asking the model nicely.
+A FastAPI service that ingests PDF, TXT and Markdown documents into a Chroma
+vector store and answers questions about them with Gemini. Every answer carries
+the source document, the exact location of the supporting text, and a verbatim
+excerpt. When the answer is not in the documents, it says so instead of guessing,
+and it says so before the language model is ever called rather than by asking
+the model nicely.
 
 ## Contents
 
@@ -29,7 +26,9 @@ model is ever called, not by asking the model nicely.
 
 A FastAPI service that ingests PDF, TXT and Markdown documents into a Chroma
 vector store and answers questions about them using Gemini, with evidence
-attached to every answer.
+attached to every answer. It would rather return `The requested information is
+unavailable in the provided documents.` than invent a plausible answer, and that
+property is enforced by code before the language model is ever called.
 
 Against the assignment brief:
 
@@ -42,8 +41,8 @@ Against the assignment brief:
 | State that information is unavailable rather than guessing | Met, deterministic relevance gate plus post-generation validation |
 | Ingestion and question answering endpoints | Met, five endpoints |
 | Evaluation questions across answerable, unanswerable and multi evidence categories | Met and exceeded, 30 questions at 10 per category |
-| Python with a clean modular architecture | Met, five flat modules |
-| Environment variables for keys and configuration | Met, `.env` with 13 variables |
+| Python with a clean modular architecture | Met, seven flat modules, no package tree |
+| Environment variables for keys and configuration | Met, `.env.example` lists every variable the app or the container entrypoint reads |
 | Tests for retrieval, API behaviour and failure cases | Met, 110 tests, three suites, fully offline |
 | Docker support and setup documentation | Met, Dockerfile and compose service |
 | An existing LLM with no training | Met, Gemini free tier |
@@ -182,13 +181,10 @@ on the local machine, and nothing is sent anywhere else.
 
 **A missing key does not stop the service.** `/healthz` reports `degraded`, and
 the endpoints that need Gemini return 503 with an actionable message. Listing,
-deleting, the health check and the interactive documentation all keep working, so
-the service can be inspected before any secret exists.
-
-**Changing the embedding model or the dimension requires re-indexing.** The
-collection is created with a fixed dimensionality and a fixed distance space.
-Delete `CHROMA_PERSIST_DIR` and ingest again, or queries will fail against a
-mismatched index.
+deleting, the health check and `/docs` all keep working, so the service can be
+inspected before any secret exists. **Changing the embedding model or the
+dimension requires re-indexing**: delete `CHROMA_PERSIST_DIR` and ingest again,
+or queries will fail against a mismatched index.
 
 ---
 
@@ -223,12 +219,10 @@ curl -X POST http://localhost:8000/api/documents \
 
 The `document_id` is a slug of the filename without its extension. It is stable
 across re-ingestion on purpose, because evidence locations and delete requests
-reference it, and a random identifier would break that continuity.
-
-Ingestion embeds before it deletes. If embedding fails part way through, for
-example because the daily free tier quota is spent, the previously indexed
-version of the document is left intact rather than destroyed on the way to a
-failure.
+reference it, and a random identifier would break that continuity. Ingestion
+embeds before it deletes: if embedding fails part way through, for example
+because the daily free tier quota is spent, the previously indexed version of the
+document is left intact rather than destroyed on the way to a failure.
 
 ### List
 
@@ -295,13 +289,11 @@ between 1 and 20.
 }
 ```
 
-**About this example.** The evidence fields are real and reproducible. The
+**About this example.** The evidence fields are real and reproducible: the
 excerpt is a verbatim slice of chunk 6 of the committed `employee_handbook.pdf`,
-at page 2, characters 600 to 1356, matching a recorded live run. You can
-reproduce it exactly by loading that file with the committed splitter and
-printing the chunk with `chunk_index` 6. The `answer` text shows the shape of a
-grounded response and the citation format; the wording is illustrative rather
-than a captured transcript.
+at page 2, characters 600 to 1356, matching a recorded live run. The `answer`
+text shows the shape of a grounded response and the citation format; its wording
+is illustrative rather than a captured transcript.
 
 Four details in that response matter more than they look:
 
@@ -311,17 +303,12 @@ Four details in that response matter more than they look:
   important property of the whole design.
 - **`char_end` describes the whole chunk, not the excerpt.** The excerpt is
   truncated at 500 characters while the location still addresses the full chunk,
-  so `char_end` can be greater than the excerpt length. Both numbers are honest
-  about different things.
+  so `char_end` can exceed the excerpt length. Both numbers are honest about
+  different things.
 - **For PDFs, offsets are relative to the page text, not the whole file.** Each
   page is split independently, so the location always reports the page number
   alongside the offsets. For TXT and Markdown there is no `page_number` field.
-- **A refused question can return evidence.** `answerable` is false and the answer
-  is the canonical message, but `sources` still lists the chunks that were
-  retrieved and then rejected. Suppressed-but-present evidence is the more useful
-  signal to a caller than a silent empty list, so it is returned deliberately.
-  `evidence_count` counts only the citations the model made that survived
-  validation, so it can be `0` while `sources` is populated.
+- **A refused question can return evidence.** See the next section.
 
 ### When the answer is not available
 
@@ -362,20 +349,17 @@ chunks through, the model ran, and the answer was refused. `answer` and
 Recorded examples from the same run: `u02` returned `answerable: false` with two
 gated chunks and one cited document, `u06` and `u09` returned one gated chunk and
 one cited document each, and `m10` abstained with eight gated chunks in context.
-The table above is the contract; the counts on those four rows are the recorded
-values.
+The table is the contract; those counts are the recorded values.
 
 The contract, stated once: **`answer` is the canonical message and `answerable`
 is `false` whenever the service refuses. `sources` is populated only when chunks
 were retrieved, and its emptiness is not by itself a statement about the gate.**
-
 A `retrieved_count` of zero always means the gate stopped the question outright,
-because that is the only code path that returns it. A positive `retrieved_count`
-with `answerable: false` means the model and the citation rules carried the
-refusal.
-
-That message is the same string whether the model abstained, the gate rejected
-everything, the key was missing, or the quota was spent.
+because that is the only code path that returns it. A positive
+`retrieved_count` with `answerable: false` means the model and the citation
+rules carried the refusal. The message is the same string whether the model
+abstained, the gate rejected everything, the key was missing, or the quota was
+spent.
 
 ---
 
@@ -386,134 +370,88 @@ everything, the key was missing, or the quota was spent.
       |
       v
   +------------------------------------------------------------+
-  | app/main.py    routes for documents, ask and health.         |
-  |                Validates input and maps errors to codes.     |
+  | app/main.py       routes, validation, error to status code   |
   +------------------------------------------------------------+
       |
-      v
-  +------------------------------------------------------------+
-  | app/rag.py     Service layer. Runs ingest and ask flows,     |
-  |                applies the grounding rules, builds evidence. |
-  +------------------------------------------------------------+
-      |
-      v
-  +------------------------------------------------------------+
-  | app/chains.py  LangChain factories and the answer runnable.  |
-  +------------------------------------------------------------+
-      |
-      v
-  Gemini API for chat and embeddings, Chroma on disk
+      +-----------------------------+-----------------------+
+      v                             v                       |
+  +--------------------------+  +-------------------------+
+  | app/documents.py         |  | app/rag.py              |
+  | registry, upload check,  |  | retrieve, gate, ask,    |
+  | ingest, list, delete     |  | citations, evidence     |
+  +--------------------------+  +-------------------------+
+      |                             |
+      +-----------+-----------------+
+                  v
+      +-----------------------------+
+      | app/retries.py              |  retry policy, error classification
+      | app/chains.py               |  LangChain factories, Chroma adapter
+      +-----------------------------+
+                  |
+                  v
+      Gemini API for chat and embeddings, Chroma on disk
 ```
 
-The application is five modules. There is no nested route package, no `core`
-package and no separate ingestion, retrieval or generation packages, because
-LangChain already supplies those layers.
-
-```
-knowledge-assistant/
-|-- app/
-|   |-- main.py            FastAPI app, routes, exception handlers
-|   |-- config.py          environment settings and fixed constants
-|   |-- schemas.py         request and response models
-|   |-- chains.py          LangChain factories and the answer runnable
-|   `-- rag.py             ingest, ask, list, delete, grounding and evidence
-|-- data/
-|   |-- documents/         4 medium length sample documents
-|   |-- questions.json     30 evaluation questions
-|   `-- chroma/            persisted index, ignored by git
-|-- scripts/
-|   |-- ingest_samples.py  loads the sample documents into the index
-|   |-- run_eval.py        runs the 30 questions and writes the results file
-|   `-- make_sample_pdfs.py  regenerates the sample PDF
-|-- tests/
-|   |-- conftest.py        fakes, temporary store, client fixtures
-|   |-- test_retrieval.py  retrieval behaviour
-|   |-- test_api.py        API behaviour
-|   `-- test_failures.py   failure cases
-|-- docs/
-|   |-- test_results.md    captured pytest output
-|   `-- evaluation_results.md  per category evaluation metrics
-|-- .env.example
-|-- .gitignore
-|-- Dockerfile
-|-- docker-compose.yml
-|-- requirements.txt
-|-- requirements-dev.txt
-`-- README.md
-```
-
-### Ingest flow
-
-A multipart upload arrives. The extension and size are validated. The bytes go
-to a temporary file, because LangChain loaders read from paths. The loader for
-the extension returns one `Document` per page for PDF and one for TXT and
-Markdown. The splitter turns them into chunks and records exact character
-offsets. The new chunks are embedded, the superseded chunks for the same
-document are deleted, and the new chunks are added. The response returns the
-document identifier, filename, media type and chunk count.
-
-### Ask flow
-
-The question is embedded with the retrieval query task type and the store
-returns the closest chunks with their raw cosine distances. Scores are
-`1 - distance`. The relevance gate keeps only chunks at or below
-`RELEVANCE_MAX_DISTANCE`. When nothing passes, the response is the canonical
-unavailable message and the model is never called.
-
-Otherwise numbered context blocks are built from the surviving chunks, the
-answer runnable is invoked, citations are validated against the blocks that were
-actually sent, and the response carries verbatim evidence. Evidence is taken
-from the chunks on disk, outside the model path.
+Seven flat modules, no package tree. `documents.py` and `rag.py` never import each
+other; both go down through `retries.py` and `chains.py`.
 
 ### Grounding, in three steps
 
-1. **Relevance gate.** If no chunk is at or below the threshold, return the
-   unavailable message without calling the model. This is deterministic and
-   free.
-2. **Strict prompt at zero temperature with structured output.** The model is
-   instructed to abstain and constrained to an `Answer` schema with `answer`,
-   `answerable` and `citations` fields.
+1. **Relevance gate.** The question is embedded, the store returns chunks with
+   raw cosine distances, scores are `1 - distance`, and only chunks at or below
+   `RELEVANCE_MAX_DISTANCE` survive. If none do, return the unavailable message
+   without calling the model. Deterministic and free.
+2. **Strict prompt at zero temperature with structured output.** Surviving
+   chunks become numbered context blocks. The model is instructed to abstain and
+   constrained to an `Answer` schema with `answer`, `answerable` and `citations`
+   fields.
 3. **Citation validation after generation.** Any citation number not present in
    the context that was sent is dropped. If the model claimed an answer but no
    valid citation survives, the response is demoted to unavailable. Model
    abstention wording is normalised to the canonical message.
 
-The final `answerable` value is the result of all three.
+The final `answerable` value is the result of all three. None of them checks
+whether the answer's sentences are actually supported by the chunks it cites —
+see [Limitations](#limitations).
 
 ### LangChain components
 
-| Need | Component | Notes |
-|---|---|---|
-| PDF parsing | `PyPDFLoader` | One `Document` per page, zero based page value in metadata, converted to one based. No OCR. |
-| TXT and Markdown parsing | `TextLoader` | Read with `autodetect_encoding=True`. Headings stay in the text and act as retrieval signal. |
-| Chunking | `RecursiveCharacterTextSplitter` | Size 800, overlap 150, `add_start_index=True`, separators on paragraph, line, sentence, word then character. |
-| Embeddings | `GoogleGenerativeAIEmbeddings` | Task types `retrieval_document` and `retrieval_query`, `output_dimensionality=768`, 30 second timeout. |
-| Vector store | `Chroma` | Persist directory, collection `knowledge_docs`, `hnsw:space` set to cosine. |
-| Retrieval | `Chroma.similarity_search_with_score` | Returns the raw cosine distance, which the gate needs. |
-| Prompt | `ChatPromptTemplate` | System and human parts. |
-| Model | `ChatGoogleGenerativeAI` | Temperature 0, 1024 output tokens, retries from `API_MAX_RETRIES`. |
-| Structured output | `with_structured_output` | Returns the validated `Answer` model, replacing manual JSON parsing. |
-| Composition | `RunnablePassthrough`, `RunnableLambda` | Composes prompt, model and parser into one runnable. |
+PDF parsing is `PyPDFLoader`, TXT and Markdown are `TextLoader` with
+`autodetect_encoding=True`, chunking is `RecursiveCharacterTextSplitter` at the
+size and overlap in [Configuration](#configuration), embeddings are
+`GoogleGenerativeAIEmbeddings`, the store is `Chroma` with `hnsw:space` set to
+cosine, retrieval is `similarity_search_with_score` because the gate needs the
+raw distance, and generation is `ChatPromptTemplate` composed with
+`ChatGoogleGenerativeAI` and `with_structured_output`, which replaces manual JSON
+parsing with a validated object.
 
 LangChain legacy chain classes are not used. In LangChain 1.x they live in a
-separate package and are being retired in favour of runnable composition.
+separate package and are being retired in favour of runnable composition. Each
+component is built by a small factory that accepts an alternative object —
+`build_loader`, `build_splitter` and `load_and_split` in `documents.py`, where
+they are used, and `build_embeddings`, `build_store` and `build_answer_chain` in
+`chains.py`. That is what lets the test suite swap in deterministic fakes without
+touching a route.
 
-Each component is built by a small factory in `chains.py` that accepts an
-alternative object: `build_loader`, `build_splitter`, `build_embeddings`,
-`build_store`, `build_answer_chain`. That is what lets the test suite swap in
-deterministic fakes without touching a route.
+`langchain-chroma` exposes no public API that returns stored documents and
+metadata together, which listing, deleting and citation checking all need. The
+private `_collection` attribute is therefore reached in exactly one place,
+`chains.collection_of`, and nothing else in the application may touch it. See
+[Limitations](#limitations) for what that coupling costs on upgrade.
 
 ---
 
 ## Architectural decisions
 
 **LangChain components instead of hand written loaders, splitters, embeddings
-and store wrappers.** The built-in components replace roughly thirteen modules
-that would each need their own tests, and they are the standard way to do this.
-Rejected: the hand written layer set, which was larger and needed more tests.
-LlamaIndex solves the same problem and only one of the two is needed.
-LangGraph arrives as a transitive dependency but is only justified by multi hop
-or agent reasoning, which this project does not have.
+and store wrappers.** The brief asks for "a vector store of your choice" and
+prohibits only training a model from scratch, so an off the shelf integration
+library is inside the terms rather than a loophole. The built-in components
+replace roughly thirteen modules that would each need their own tests, and they
+are the standard way to do this. Rejected: the hand written layer set, which was
+larger and needed more tests. LlamaIndex solves the same problem and only one of
+the two is needed. LangGraph arrives as a transitive dependency but is only
+justified by multi hop or agent reasoning, which this project does not have.
 
 **Gemini through `langchain-google-genai` for both chat and embeddings, with one
 key.** No model weights in the image keeps Docker smaller, and one key removes a
@@ -550,10 +488,16 @@ number exists in the context that was sent. Rejected: two tier thresholds and a
 minimum source count rule, both removed to save time, with multi document
 correctness asserted directly in the evaluation instead.
 
-**A flat five module application.** LangChain already supplies the ingestion,
+**A flat seven module application.** LangChain already supplies the ingestion,
 retrieval and generation layers, so nested packages would only add navigation
 cost. Rejected: a layered package tree where import depth exceeded the logic in
 each file.
+
+**One file per responsibility, and the seam chosen by what changes together.**
+`documents.py` and `rag.py` split because a 353 line file was doing twelve jobs,
+not because a diagram called for two boxes. Rejected: a fourth module for a
+responsibility that fits, and rejected again the layered `api/`, `core/`,
+`services/` tree that the import ceremony would have outgrown.
 
 ---
 
@@ -579,8 +523,8 @@ Studio first.
 ### A run is fresh by default
 
 Every answer is saved to a cache as it arrives, so a quota wall does not throw
-away work that has already been paid for. That cache is the reason a run can
-quietly stop being a run, so the default is the opposite of the obvious one:
+away work that has already been paid for. That cache is why a run can quietly
+stop being a run, so the default is the opposite of the obvious one:
 
 | Flag | Behaviour |
 |---|---|
@@ -588,11 +532,10 @@ quietly stop being a run, so the default is the opposite of the obvious one:
 | `--resume` | Reuses the saved answers and asks only the missing ones. |
 | `--cache PATH` | Where the answers are saved. Defaults to a file in the system temp directory. |
 
-A report states which it was. `Fresh run` in the run metadata is `yes` only when
-every question was actually asked; otherwise a banner at the top of the report
-says how many answers were replayed. Replaying a cache produces the same numbers
-every time, which is exactly the property that makes it dangerous to publish
-without the stamp.
+A report states which it was. `Fresh run` is `yes` only when every question was
+actually asked; otherwise a banner at the top of the report says how many answers
+were replayed. Replaying a cache reproduces the numbers exactly, which is
+precisely what makes it dangerous to publish without the stamp.
 
 ### What the two retrieval numbers mean
 
@@ -601,27 +544,19 @@ without the stamp.
 | Retrieval recall at k | Did a gold document survive the relevance gate, measured **before** generation? |
 | Gold document citation rate | Did the model go on to **cite** a gold document? |
 
-They are not the same measurement. Citation recall cannot fall below retrieval
-recall for the same question, so a gap between them is citation discipline
-failing rather than retrieval failing, and reporting only the first number hides
-which of the two broke. The recorded run in
-[`docs/evaluation_results.md`](docs/evaluation_results.md) was measured before
-this split existed; the current tool measures both.
+Citation recall cannot fall below retrieval recall for the same question, so a
+gap between them is citation discipline failing rather than retrieval failing,
+and reporting only the first number hides which of the two broke.
 
 ### How the question set is designed
 
-- **Answerable, 10.** Fully answered by one document.
-- **Unanswerable, 10.** The fact is absent from the whole corpus, but the
-  subject matter is close enough that retrieval will return chunks. This is what
-  forces the gate and the abstention path to do real work rather than passing
-  trivially on an empty result set.
-- **Multi evidence, 10.** Each needs at least two documents, using deliberate
-  cross references. Parental leave length lives in `benefits_guide.md` while the
-  notification path lives in `employee_handbook.pdf`. The reimbursable home
-  office equipment list lives in `remote_work_policy.md` while the expense
-  limits and approval chain live in `employee_handbook.pdf`. The device
-  enrolment deadline lives in `it_security_policy.txt` while new hire equipment
-  readiness lives in `employee_handbook.pdf`.
+Ten each of **answerable** (fully answered by one document), **unanswerable**
+(the fact is absent from the whole corpus, but the subject matter is close
+enough that retrieval will return chunks, which is what forces the gate and the
+abstention path to do real work), and **multi evidence** (deliberate cross
+references, so parental leave lives in `benefits_guide.md` while the notification
+path lives in `employee_handbook.pdf`, and the home office equipment list lives
+in `remote_work_policy.md` while the expense limits live in the handbook).
 
 All four sample documents describe the same invented organisation, so no correct
 answer can arrive from general world knowledge. That removes a whole class of
@@ -631,52 +566,22 @@ proves the answer came from the index rather than from the model.
 
 ### Results
 
-Recorded on 2026-10-13 with `gemini-3.1-flash-lite` and `gemini-embedding-001`
-at 768 dimensions, chunk size 800 and overlap 150, top k 8, threshold 0.33,
-temperature 0, over 68 indexed chunks. Full detail is in
-[`docs/evaluation_results.md`](docs/evaluation_results.md).
-
-The first three rows below are **citation** figures. That run predates the split
-between citation recall and retrieval recall, so the old "retrieval hit rate" in
-the results file is a citation number wearing the wrong name, and the corrected
-name is what is used here.
-
-| Metric | Target | Result |
-|---|---|---|
-| Gold document citation rate, answerable | reported | 10 of 10, 100 percent |
-| Gold document citation rate, multi evidence | reported | 10 of 10, 100 percent |
-| Gold document citation rate, overall | at least 80 percent | 20 of 20, 100 percent |
-| Answerable accuracy, all gold keywords present | at least 70 percent | 9 of 10, 90 percent |
-| Unanswerable accuracy, canonical abstention | 10 of 10 | 10 of 10, 100 percent |
-| Hallucination rate on unanswerable questions | 0 | 0 |
-| Multi evidence rate | at least 70 percent | 7 of 10, 70 percent |
-| Citation validity, verbatim excerpts | 100 percent | 34 of 34, 100 percent |
-
-The multi evidence rate is reported on its own line and is not folded into the
-overall retrieval number, so a collapse in multi document answers cannot hide
-behind a strong answerable score.
-
-Retrieval returned at least one gated chunk for 6 of the 10 unanswerable
-questions, so those abstentions were produced by the model and the citation
-rules rather than by an empty result set. That is the harder and more meaningful
-half of the behaviour.
-
-### The calibrated threshold
-
-`RELEVANCE_MAX_DISTANCE` is set to **0.33**, chosen by a stated rule applied to a
-retrieval only sweep that spent no generation calls: the lowest threshold that
-keeps every multi evidence question whole, because losing one caps that category
-below its 70 percent target. At 0.33 that costs 4 of the 10 unanswerable
-questions being stopped by the gate instead of more.
-
-The full table, the rule and the reasoning are in
-[`docs/calibration_sweep.txt`](docs/calibration_sweep.txt). Every line of that
-file, prose included, is generated by the tool — which is why it is not copied
-here. It can be regenerated for the cost of one embedding request per question:
+The numbers live in
+[`docs/evaluation_results.md`](docs/evaluation_results.md) and nowhere else,
+because that file is written by the runner and this one is written by hand. A
+hand-copied table is a table that drifts; regenerating is one command.
 
 ```bash
-python scripts/run_eval.py --sweep --sweep-output docs/calibration_sweep.txt
+python scripts/run_eval.py --calibration docs/calibration_sweep.txt
 ```
+
+**The threshold finding, stated plainly.** The relevance gate's score
+distributions for answerable and unanswerable questions overlap. At 0.33 the
+gate stops 4 of the 10 unanswerable questions before any model call, and the
+remaining six are handled by the prompt and the deterministic citation rules.
+Abstention is carried by layers two and three, not by the gate alone. That is the
+weakest number in the system and it is reported here rather than left in a
+results file.
 
 ---
 
@@ -692,11 +597,8 @@ The default suite needs no network access and no API key. `conftest.py` provides
 fake embeddings built on the LangChain `Embeddings` interface, using
 deterministic hashed vectors, and a stub answer runnable built with
 `RunnableLambda`. Both are injected through the same factories used in
-production, and every test uses a temporary store directory.
-
-**110 passed, 1 skipped, 95 percent statement coverage.** The skip is the live
-smoke test, which is skipped automatically without a key. Counts break down as
-42 in `test_retrieval.py`, 33 in `test_api.py` and 35 in `test_failures.py`.
+production, and every test uses a temporary store directory. Captured output is
+in [`docs/test_results.md`](docs/test_results.md).
 
 | Suite | Covers |
 |---|---|
@@ -704,36 +606,90 @@ smoke test, which is skipped automatically without a key. Counts break down as
 | `test_api.py` | The full endpoint and status matrix, response schemas, ask validation, health states, `/docs` and the OpenAPI schema |
 | `test_failures.py` | Rejected uploads, model outage, retries exhausted and recovered, malformed output, missing key, a failed re-ingest leaving the previous version intact, grounding guarantees, the prompt contract |
 
-Captured output is in [`docs/test_results.md`](docs/test_results.md).
+### What the offline suite does not prove
 
-**What this suite does not prove.** The fake embedder hashes words into vectors,
-so it rewards word overlap rather than meaning. It therefore verifies mechanics:
-ranking, thresholds, offsets, deletion, evidence and status codes. Whether the
-assistant answers a *paraphrased* question correctly is measured by the live
-evaluation run and nowhere else. Where a test needs to reach a specific chunk, it
-builds the query from that chunk's own words for exactly this reason.
+The fake embedder is SHA-256 word hashing: two sentences with the same words get
+the same vector, and two sentences that mean the same thing get **nothing like
+it**. Read the pass count as a statement about mechanics, not about retrieval
+quality.
+
+- **It does prove:** ranking order, threshold behaviour in both directions, chunk
+  offsets, re-ingest replacing rather than duplicating, verbatim evidence, status
+  codes, retry counts and ordering.
+- **It cannot prove:** that a paraphrased question reaches the right chunk. Every
+  test that needs to reach a specific chunk builds the query from that chunk's own
+  words, precisely because a paraphrase does not survive the hash.
+- **Semantic quality is measured in exactly one place**, the live evaluation run
+  against real Gemini embeddings, and nowhere else. A suite of 110 green tests
+  that cannot tell a paraphrase from a non-paraphrase is not 110 tests of
+  retrieval quality, and should not be counted as one.
 
 ---
 
 ## Limitations
 
+The weaknesses below are stated first, because the mitigation column is worth
+nothing without them. Read top to bottom as a decreasing order of how much they
+matter.
+
+### The ones that actually matter
+
+**Citation validation is not answer faithfulness.** The three grounding layers
+check that a citation number existed in the context sent, that the excerpt is a
+verbatim slice of the indexed chunk, and that an answer without a surviving
+citation is demoted. None of them check that the sentences in the answer are
+supported by the chunks it cites. A response with `answerable: true`,
+`citations: [1]` and fluent, well-formed, entirely unsupported prose passes all
+three layers and gets served with a real-looking excerpt attached. Nothing here
+is an entailment check and no amount of citation bookkeeping becomes one.
+
+**Gold keyword scoring is strict token containment, and it has already cost a
+point.** A gold keyword counts as present only when every one of its tokens
+appears in the answer after normalisation. Question `a05` was scored **wrong**
+solely because the answer said "People Operations" as two words where the
+keyword expected them joined, while stating the fifteen week rule correctly. That
+is a scorer artefact, not a wrong answer, and it is the single biggest
+methodological weakness in the evaluation.
+
+**The relevance gate does not do as much as it looks like it does.** Score
+distributions for answerable and unanswerable questions overlap. At the
+calibrated 0.33 the gate stops 4 of the 10 unanswerable questions before any
+model call; the other 6 reach the model and are stopped by the prompt and the
+citation rules. Abstention is carried by layers two and three.
+
+**The published evaluation numbers are one run of one model on one day.** They
+are stamped with `Fresh run` and a replay count precisely because a cached replay
+produces identical numbers and identical confidence. There is no confidence
+interval, because one run cannot produce one.
+
+**`langchain-chroma` has no public API for reading stored documents and metadata
+together.** Listing, deleting and citation checking all need it, so the
+application reaches the private `_collection` attribute behind
+`chains.collection_of`. A Chroma upgrade that moves it breaks three features at
+once, silently, with no test able to catch it, because the tests use the same
+adapter.
+
+**The free tier is the binding constraint, not the code.** Ingestion is not
+idempotent in cost: three full ingestions of four documents on one day exhausted
+a daily embedding quota of 1000 requests, and a fourth failed with a retry delay
+of ten hours that no backoff can clear.
+
+### Everything else
+
 | Limitation | Mitigation |
 |---|---|
-| Gemini free tier rate limits, and quotas vary by project | Retries with exponential backoff, batched embeddings through the LangChain wrapper, and a gate that avoids the model call for unanswerable questions |
-| Ingestion is expensive on the free tier. Three full ingestions of the four sample documents on one day exhausted the daily embedding quota of 1000 requests, and a fourth attempt failed with a retry delay of ten hours | The backoff cannot clear a delay that long. Ingest once and expect 503 with an actionable message when the quota is spent. Ingestion is not idempotent in cost, so re-ingesting to "refresh" is not free |
-| The generation model is a flash lite variant, chosen because the free tier quota for the stronger flash model is smaller than a single evaluation run needs | Both identifiers are environment variables. This is the most likely reason the multi evidence rate sits exactly on target rather than above it |
-| The multi evidence rate is 7 of 10, exactly on the 70 percent target with no margin | Both failures are citation discipline, not retrieval. One question cited a single document for a two document question; another abstained with eight relevant chunks in context. A stronger model is expected to close both. The category is reported on its own line so the margin is visible |
-| The default chat model may be retired for new accounts, as `gemini-2.5-flash` already is | Every Google model identifier moves. `GEMINI_CHAT_MODEL` is the single knob |
-| The embedding model identifier may be superseded | Confirm the current free tier identifier in AI Studio before the first run. A model or dimension change requires deleting the persist directory and re-ingesting |
-| A single threshold that is badly calibrated produces either false unavailable answers or too much context | Calibrated against the 30 question set with a retrieval only sweep that cost no model calls, and recorded at 0.33 with its reasoning |
-| `PyPDFLoader` has no optical character recognition, and layout parsing is limited for columns and tables | Stated plainly. The sample PDF keeps a simple single column layout |
-| Character offsets in PDF chunks are relative to the page, not the file | Evidence reports the page number together with the offsets inside that page |
-| The model may paraphrase evidence in the answer text | Excerpts are taken from the retrieved chunks outside the model path, and the answer text is a separate field from the sources list |
-| The embedded store is single process and has no authentication | Out of scope for an assignment deliverable |
-| The network is required at run time | 503 with an actionable message, retries, and a test suite that runs fully offline |
-| `langchain-community` reports that it is being sunset in favour of standalone integration packages | `PyPDFLoader` and `TextLoader` remain the supported path today. If they move, the change is confined to `build_loader` in `app/chains.py`, the single place that imports them |
-| Hashed fake embeddings cannot measure semantic similarity | Offline tests verify mechanics only. Semantic quality comes from the live evaluation run |
-| LangChain packages move quickly | Eight packages are pinned with `==`, including `langchain-core` because the test fakes are built on its base classes. An upgrade is a deliberate pin change followed by a full test run |
+| The multi evidence rate is 7 of 10, exactly on the 70 percent target with no margin | Both failures are citation discipline, not retrieval: one question cited a single document for a two document question, another abstained with eight relevant chunks in context. The category is reported on its own line so the margin stays visible |
+| The generation model is a flash lite variant, chosen because the free tier quota for the stronger flash model is smaller than a single evaluation run needs | Both identifiers are environment variables. This is the most likely reason multi evidence sits exactly on target rather than above it |
+| Hashed fake embeddings cannot measure semantic similarity | The offline suite verifies mechanics only. Semantic quality comes from the live evaluation run and nowhere else |
+| Google model identifiers move; `gemini-2.5-flash` is already retired | `GEMINI_CHAT_MODEL` and `GEMINI_EMBEDDING_MODEL` are the only knobs |
+| Changing the embedding model or the dimension needs a re-index | Delete `CHROMA_PERSIST_DIR` and ingest again; the collection keeps its original dimension and distance space |
+| A single badly calibrated threshold gives either false unavailable answers or too much context | Calibrated against the 30 question set with a retrieval only sweep that spent no generation calls. The table and the rule that picked 0.33 are in [`docs/calibration_sweep.txt`](docs/calibration_sweep.txt) |
+| `PyPDFLoader` has no OCR, and layout parsing is limited for columns and tables | Stated plainly. The sample PDF keeps a simple single column layout |
+| PDF offsets are relative to the page, and `char_end` addresses the whole chunk while the excerpt is capped at 500 characters | Evidence reports the page number alongside the offsets, and the caption says which number describes what |
+| The model may paraphrase evidence in the answer text | Excerpts are sliced from the retrieved chunks outside the model path, and the answer text is a separate field from the sources list |
+| The embedded store is single process, unauthenticated, and needs the network | Out of scope for an assignment deliverable. 503 with an actionable message, retries, and a test suite that runs fully offline |
+| `langchain-community` reports that it is being sunset in favour of standalone integration packages | `PyPDFLoader` and `TextLoader` remain supported today. If they move, the change is confined to `build_loader` in `app/documents.py`, the one place that imports them |
+| LangChain packages move quickly | All thirteen runtime dependencies are pinned with `==`, including `langchain-core` because the test fakes are built on its base classes. An upgrade is a deliberate pin change followed by a full test run |
 
 ### Troubleshooting
 
@@ -752,11 +708,7 @@ dimension and distance space.
 
 **`PermissionError` on the pytest temporary directory on Windows.** A stale
 `pytest-of-<user>` folder in the system temp directory can become unreadable.
-Point pytest elsewhere with `--basetemp`:
-
-```bash
-python -m pytest -q --basetemp ./.pytest-tmp
-```
+Point pytest elsewhere: `python -m pytest -q --basetemp ./.pytest-tmp`.
 
 ---
 
