@@ -1,9 +1,18 @@
 Threshold calibration sweep. Measured by scripts/run_eval.py --sweep on 2026-10-13.
 
-The table below is the measured output. The prose that used to precede it was
-hand written and no longer agrees with it, so it was deleted. scripts/run_eval.py
---sweep now emits this entire file, header included, and Phase 4 regenerates it.
-Do not hand edit it.
+STATUS: the table below is the last measured output and has NOT been
+regenerated since. A regeneration attempt on 2026-10-13 failed during ingestion
+with `429 RESOURCE_EXHAUSTED` on `embed_content_free_tier_requests`, limit 1000
+per day, with 8h34m on the quota window. It is regenerated, never hand edited:
+
+    python scripts/run_eval.py --sweep --sweep-output docs/calibration_sweep.txt
+
+The prose that used to precede the table was hand written and no longer agreed
+with it, so it was deleted rather than corrected. `run_eval.py --sweep` now emits
+this entire file, header, table and selection note included, derived from the
+measured distances by `select_threshold()` and `sweep_selection_note()`. The
+selection note is absent from this copy only because that regeneration has not
+run yet.
 
 Each candidate threshold was applied to the cosine distances measured once per
 question. No generation model was called. "Stopped by gate" counts unanswerable

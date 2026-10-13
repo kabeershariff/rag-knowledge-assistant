@@ -546,7 +546,9 @@ precisely what makes it dangerous to publish without the stamp.
 
 Citation recall cannot fall below retrieval recall for the same question, so a
 gap between them is citation discipline failing rather than retrieval failing,
-and reporting only the first number hides which of the two broke.
+and reporting only the first number hides which of the two broke. The committed
+results file predates this split, so its "Retrieval hit rate" rows are citation
+figures under the old name.
 
 ### How the question set is designed
 
@@ -574,6 +576,14 @@ hand-copied table is a table that drifts; regenerating is one command.
 ```bash
 python scripts/run_eval.py --calibration docs/calibration_sweep.txt
 ```
+
+**The committed copy of that file is stale, and says so.** It was produced on
+2026-10-13 by a runner that did not stamp its freshness and did not separate
+retrieval recall from citation recall. Regenerating it on 2026-10-13 failed with
+`429 RESOURCE_EXHAUSTED` on the free tier's daily embedding quota, so the
+numbers were left exactly as measured rather than edited. The runner that
+produces the file now stamps `Fresh run` and a replay count, which is the
+mechanism that stops this happening invisibly next time.
 
 **The threshold finding, stated plainly.** The relevance gate's score
 distributions for answerable and unanswerable questions overlap. At 0.33 the

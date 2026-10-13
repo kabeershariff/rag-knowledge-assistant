@@ -2,6 +2,15 @@
 
 Thirty questions, ten per category, run through the real ingestion, retrieval and generation path. Every number below comes from the run recorded here.
 
+> **Provenance: this file has not been regenerated.** The run below was produced
+> on 2026-10-13 by a version of the runner that did not stamp its freshness, and
+> it predates the split of "retrieval hit rate" into retrieval recall and
+> citation rate. A regeneration attempt on 2026-10-13 failed during ingestion
+> with `429 RESOURCE_EXHAUSTED` on `embed_content_free_tier_requests`, limit 1000
+> per day. The numbers are left exactly as measured rather than edited, and the
+> runner that produces this file now stamps `Fresh run` and a replay count so
+> that a stale copy cannot be mistaken for a current one.
+
 ## Run metadata
 
 | Item | Value |
