@@ -46,7 +46,6 @@ python -m pytest -q --cov=app --cov-report=term-missing
 .......................................                                  [100%]
 ============================== warnings summary ===============================
 app\documents.py:18
-  C:\Dev\Re\app\documents.py:18: DeprecationWarning: `langchain-community` is being sunset and is no longer actively maintained. See https://github.com/langchain-ai/langchain-community/issues/674 for details and migration guidance toward standalone integration packages.
     from langchain_community.document_loaders import PyPDFLoader, TextLoader
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

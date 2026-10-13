@@ -654,12 +654,16 @@ three layers and gets served with a real-looking excerpt attached. Nothing here
 is an entailment check and no amount of citation bookkeeping becomes one.
 
 **Gold keyword scoring is strict token containment, and it has already cost a
-point.** A gold keyword counts as present only when every one of its tokens
-appears in the answer after normalisation. Question `a05` was scored **wrong**
-solely because the answer said "People Operations" as two words where the
-keyword expected them joined, while stating the fifteen week rule correctly. That
-is a scorer artefact, not a wrong answer, and it is the single biggest
-methodological weakness in the evaluation.
+point.** A gold keyword counts as present only when every one of its tokens appears
+in the answer after normalisation, matched as a multiset so that word order does not
+change the result. Question `a05` was scored **wrong** on that rule while stating
+the fifteen week notice rule correctly. The runner records which keywords were
+missing, so the miss is visible per question in
+[`docs/evaluation_results.md`](docs/evaluation_results.md); it is a scorer artefact
+rather than a wrong answer, and strict containment is the single biggest
+methodological weakness in the evaluation. Loosening the match to hide it would let
+a wrong answer score correct, so the fix is a better synonym table rather than a
+softer rule.
 
 **The relevance gate does not do as much as it looks like it does.** Score
 distributions for answerable and unanswerable questions overlap. At the
@@ -688,7 +692,7 @@ of ten hours that no backoff can clear.
 
 | Limitation | Mitigation |
 |---|---|
-| The multi evidence rate is 7 of 10, exactly on the 70 percent target with no margin | Both failures are citation discipline, not retrieval: one question cited a single document for a two document question, another abstained with eight relevant chunks in context. The category is reported on its own line so the margin stays visible |
+| The multi evidence rate is 7 of 10, exactly on the 70 percent target with no margin | Three failures, not two: `m01` was answerable but missing a gold fact, `m05` returned a single document for a two document question, and `m10` abstained with eight relevant chunks in context. The category is reported on its own line so the margin stays visible |
 | The generation model is a flash lite variant, chosen because the free tier quota for the stronger flash model is smaller than a single evaluation run needs | Both identifiers are environment variables. This is the most likely reason multi evidence sits exactly on target rather than above it |
 | Hashed fake embeddings cannot measure semantic similarity | The offline suite verifies mechanics only. Semantic quality comes from the live evaluation run and nowhere else |
 | Google model identifiers move; `gemini-2.5-flash` is already retired | `GEMINI_CHAT_MODEL` and `GEMINI_EMBEDDING_MODEL` are the only knobs |

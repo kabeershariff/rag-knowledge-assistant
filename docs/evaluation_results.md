@@ -112,7 +112,7 @@ was removed rather than corrected. The generated reasoning lives in
 
 ## Caveats
 
-The multi evidence rate sits exactly on its target at 7 of 10, with no margin. Question m05 failed because the model cited only `remote_work_policy.md` for a nine hundred dollar item and answered manager, never reaching the handbook where that amount belongs to the department lead. Question m10 failed because the model abstained even though eight relevant chunks were in context. Both are citation discipline failures rather than retrieval failures, and a stronger generation model would be expected to close them.
+The multi evidence rate is 7 of 10 against a 70 percent target, with no margin. The three questions that missed it are listed in the per question table above. `m01` was answerable and cited both gold documents but its answer omitted the `15th week` fact from `employee_handbook.pdf`. `m05` returned a single distinct document for a question whose gold answer spans two, so it could not satisfy the two document rule. `m10` abstained with eight gated chunks in context. All three are citation discipline outcomes rather than retrieval failures, which is why the multi evidence row of the retrieval hit rate table above reads 10/10.
 
 The generation model is `gemini-3.1-flash-lite`. It was chosen because `gemini-3.8-flash`, the identifier this project started with, allows only five requests per minute and twenty requests per day on the free tier, which is fewer than the thirty calls a single evaluation needs. The four thousand dollar difference in capability is the most likely single reason multi evidence is at exactly the target rather than above it. A full run therefore needs an account whose quota allows at least thirty generation calls.
 
