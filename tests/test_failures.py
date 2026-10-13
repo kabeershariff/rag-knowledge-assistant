@@ -98,6 +98,36 @@ def test_a_rejected_ingest_leaves_nothing_behind(client):
     assert client.get("/api/documents").json()["documents"] == []
 
 
+def test_a_failed_reingest_keeps_the_previously_indexed_version(
+    service, chunk_reader, verbatim_query, monkeypatch
+):
+    """Embedding runs before the delete, so a quota failure costs nothing.
+
+    Embedding is the only network call in the ingest path, and it is the one that
+    fails on a spent free tier quota. If the superseded chunks were deleted first,
+    the failure would leave the document absent rather than stale.
+    """
+    name = "it_security_policy.txt"
+    rag.ingest_document(sample_bytes(name), name, service)
+    before_registry = rag.list_documents(service)
+    before_chunks = chunk_reader(rag.DocumentRegistry.normalize(name))
+    assert before_chunks
+
+    def quota_exhausted(*args, **kwargs):
+        raise ServiceUnavailableError("Embedding quota exhausted for the day.")
+
+    monkeypatch.setattr(chains, "embed_with_retry", quota_exhausted)
+
+    with pytest.raises(ServiceUnavailableError):
+        rag.ingest_document(sample_bytes(name), name, service)
+
+    monkeypatch.undo()
+    document_id = rag.DocumentRegistry.normalize(name)
+    assert rag.list_documents(service) == before_registry
+    assert chunk_reader(document_id) == before_chunks
+    assert rag.retrieve(verbatim_query(document_id, 0), service)
+
+
 # Missing key
 
 

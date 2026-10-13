@@ -175,14 +175,17 @@ def ingest_document(content: bytes, filename: str, service: Service) -> dict:
     if not chunks:
         raise IngestError(422, "File contains no extractable text.")
 
-    # Delete the previous version before adding the new one, so re-uploading the
-    # same filename replaces it instead of accumulating chunks.
+    # Embed first, then delete the previous version, then add. Re-uploading a
+    # filename is still idempotent, because the delete clears the superseded
+    # chunks and the new ones carry explicit identifiers. Doing the delete last
+    # means a quota or rate limit failure while embedding leaves the already
+    # indexed version of the document intact, instead of destroying it on the way
+    # to a failure it was never going to survive.
     store = service.get_store()
-    store.delete(where={"document_id": document_id})
-
     vectors = chains.embed_with_retry(
         service.get_embeddings(), [chunk.page_content for chunk in chunks], service.settings
     )
+    store.delete(where={"document_id": document_id})
     chains.add_chunks(store, chunks, vectors)
 
     return service.registry.upsert(document_id, filename, media_type, len(chunks))
