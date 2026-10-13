@@ -67,6 +67,10 @@ docker compose up --build
 Then open <http://localhost:8000/docs> and use the interface, or drive it with
 curl as shown below.
 
+The image runs as an unprivileged user, not root. The index lives inside the
+image so the container is useful with no volume, and Compose mounts a named
+volume over `data/chroma`; either way the service writes as that user.
+
 Ingest the sample documents. The recommended order is through the HTTP API while
 the service is running:
 
@@ -128,7 +132,8 @@ The service starts on <http://localhost:8000>. Interactive documentation is at
 | `python -m pytest -q --cov=app` | The same with coverage |
 | `python -m pytest -m live` | Optional live smoke test, needs a key |
 | `python scripts/ingest_samples.py` | Ingest the four sample documents |
-| `python scripts/run_eval.py` | Run all 30 evaluation questions |
+| `python scripts/run_eval.py` | Fresh run of all 30 evaluation questions, writes `docs/evaluation_results.md` |
+| `python scripts/run_eval.py --resume` | Continue an interrupted run from its saved answers |
 | `python scripts/run_eval.py --sweep` | Threshold sweep, no generation calls |
 | `python scripts/make_sample_pdfs.py` | Regenerate the sample PDF |
 
@@ -571,6 +576,38 @@ seconds cannot clear a free tier retry delay of forty seconds.
 **A full run needs about 30 generation calls.** Check the daily quota in AI
 Studio first.
 
+### A run is fresh by default
+
+Every answer is saved to a cache as it arrives, so a quota wall does not throw
+away work that has already been paid for. That cache is the reason a run can
+quietly stop being a run, so the default is the opposite of the obvious one:
+
+| Flag | Behaviour |
+|---|---|
+| *(none)* | **Fresh.** Deletes the saved answers and asks all thirty questions again. |
+| `--resume` | Reuses the saved answers and asks only the missing ones. |
+| `--cache PATH` | Where the answers are saved. Defaults to a file in the system temp directory. |
+
+A report states which it was. `Fresh run` in the run metadata is `yes` only when
+every question was actually asked; otherwise a banner at the top of the report
+says how many answers were replayed. Replaying a cache produces the same numbers
+every time, which is exactly the property that makes it dangerous to publish
+without the stamp.
+
+### What the two retrieval numbers mean
+
+| Metric | Question it answers |
+|---|---|
+| Retrieval recall at k | Did a gold document survive the relevance gate, measured **before** generation? |
+| Gold document citation rate | Did the model go on to **cite** a gold document? |
+
+They are not the same measurement. Citation recall cannot fall below retrieval
+recall for the same question, so a gap between them is citation discipline
+failing rather than retrieval failing, and reporting only the first number hides
+which of the two broke. The recorded run in
+[`docs/evaluation_results.md`](docs/evaluation_results.md) was measured before
+this split existed; the current tool measures both.
+
 ### How the question set is designed
 
 - **Answerable, 10.** Fully answered by one document.
@@ -599,11 +636,16 @@ at 768 dimensions, chunk size 800 and overlap 150, top k 8, threshold 0.33,
 temperature 0, over 68 indexed chunks. Full detail is in
 [`docs/evaluation_results.md`](docs/evaluation_results.md).
 
+The first three rows below are **citation** figures. That run predates the split
+between citation recall and retrieval recall, so the old "retrieval hit rate" in
+the results file is a citation number wearing the wrong name, and the corrected
+name is what is used here.
+
 | Metric | Target | Result |
 |---|---|---|
-| Retrieval hit rate, answerable | at least 80 percent | 10 of 10, 100 percent |
-| Retrieval hit rate, multi evidence | at least 80 percent | 10 of 10, 100 percent |
-| Retrieval hit rate, overall | at least 80 percent | 20 of 20, 100 percent |
+| Gold document citation rate, answerable | reported | 10 of 10, 100 percent |
+| Gold document citation rate, multi evidence | reported | 10 of 10, 100 percent |
+| Gold document citation rate, overall | at least 80 percent | 20 of 20, 100 percent |
 | Answerable accuracy, all gold keywords present | at least 70 percent | 9 of 10, 90 percent |
 | Unanswerable accuracy, canonical abstention | 10 of 10 | 10 of 10, 100 percent |
 | Hallucination rate on unanswerable questions | 0 | 0 |

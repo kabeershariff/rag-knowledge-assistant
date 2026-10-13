@@ -165,6 +165,63 @@ def build_store(settings: Settings, embeddings: Embeddings | None = None) -> Chr
     )
 
 
+def collection_of(store: Chroma):
+    """Return the underlying Chroma collection, or raise.
+
+    `langchain-chroma` exposes no public API that reads stored documents and
+    metadata back together, so the application reaches for the private
+    `_collection` attribute in exactly one place: this function. Everything else
+    goes through `read_chunks`, `write_chunks`, `delete_where` and
+    `count_where`, so a Chroma release that moves the attribute is a change to
+    this module alone rather than a hunt through the application.
+    """
+    collection = getattr(store, "_collection", None)
+    if collection is None:
+        raise StoreAccessError(
+            "The installed langchain-chroma does not expose a readable collection. "
+            "Check the installed version against the pin in requirements.txt."
+        )
+    return collection
+
+
+class StoreAccessError(RuntimeError):
+    """Raised when the vector store cannot be read through the adapter."""
+
+
+def read_chunks(
+    store: Chroma,
+    *,
+    ids: list[str] | None = None,
+    where: dict | None = None,
+    limit: int | None = None,
+    include: list[str] | None = None,
+) -> dict:
+    """Read stored rows out of the collection.
+
+    Returns Chroma's own mapping of `ids`, `documents` and `metadatas`. This is a
+    thin, documented pass-through to the private collection, not a reimplementation
+    of the query language.
+    """
+    return collection_of(store).get(
+        ids=ids,
+        where=where,
+        limit=limit,
+        include=include if include is not None else ["documents", "metadatas"],
+    )
+
+
+def metadatas_of(store: Chroma) -> list[dict]:
+    """Return every non-empty metadata dict in the collection."""
+    records = read_chunks(store, include=["metadatas"])
+    return [metadata for metadata in (records.get("metadatas") or []) if metadata]
+
+
+def has_chunks(store: Chroma, document_id: str) -> bool:
+    """True when at least one chunk of the document is indexed."""
+    records = read_chunks(store, where={"document_id": document_id}, limit=1, include=[])
+    return bool(records.get("ids"))
+
+
 def add_chunks(store: Chroma, chunks: list[Document], vectors: list[list[float]]) -> None:
     """Add chunks to the store using vectors that were already computed.
 
@@ -173,7 +230,7 @@ def add_chunks(store: Chroma, chunks: list[Document], vectors: list[list[float]]
     the underlying call is an upsert, so re-ingesting a document replaces its
     previous version instead of duplicating it.
     """
-    store._collection.upsert(
+    collection_of(store).upsert(
         ids=[chunk.metadata["chunk_id"] for chunk in chunks],
         documents=[chunk.page_content for chunk in chunks],
         metadatas=[dict(chunk.metadata) for chunk in chunks],

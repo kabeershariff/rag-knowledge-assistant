@@ -214,9 +214,7 @@ def chunk_reader(store_of):
 
     def reader(document_id: str):
         store = store_of()
-        records = store._collection.get(
-            where={"document_id": document_id}, include=["documents", "metadatas"]
-        )
+        records = chains.read_chunks(store, where={"document_id": document_id})
         rows = list(zip(records["ids"], records["documents"], records["metadatas"]))
         return sorted(rows, key=lambda row: row[2]["chunk_index"])
 

@@ -1,4 +1,6 @@
-pytest
-pytest-cov
-httpx
-fpdf2
+# Test and sample-generation dependencies. The default suite must run offline, so
+# nothing here reaches the network at import time.
+pytest==9.1.1
+pytest-cov==7.1.0
+httpx==0.28.1
+fpdf2==2.8.9

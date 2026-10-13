@@ -2,14 +2,20 @@
 
 Run from the repository root:
 
-    python scripts/run_eval.py                    # full run at the configured threshold
-    python scripts/run_eval.py --sweep            # retrieval only, no model calls
+    python scripts/run_eval.py                    # full fresh run at the configured threshold
+    python scripts/run_eval.py --resume           # reuse a previous run's saved answers
+    python scripts/run_eval.py --sweep            # retrieval only, no generation calls
     python scripts/run_eval.py --threshold 0.30   # override the gate for one run
+
+A run is fresh by default. Every question is asked again and the saved answers are
+deleted first, so the published numbers cannot come from a previous run. Pass
+--resume to reuse them after a quota wall; a resumed report is stamped
+fresh: false and says so in the run metadata.
 
 The sweep mode embeds every question once and then reports, for each candidate
 threshold, how many unanswerable questions would be stopped by the gate and how
 many multi evidence questions would still hold both gold documents. It makes no
-model calls, so calibrating costs one embedding request per question.
+generation calls, so calibrating costs one embedding request per question.
 """
 
 from __future__ import annotations
@@ -28,13 +34,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import chains, rag
 from app.config import UNAVAILABLE_MESSAGE, Settings
-from app.rag import DocumentRegistry, Service, ask, ingest_document
+from app.rag import DocumentRegistry, Service, ingest_document
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUESTIONS_PATH = REPO_ROOT / "data" / "questions.json"
 SAMPLE_DIR = REPO_ROOT / "data" / "documents"
 RESULTS_PATH = REPO_ROOT / "docs" / "evaluation_results.md"
+SWEEP_PATH = REPO_ROOT / "docs" / "calibration_sweep.txt"
+DEFAULT_CACHE_PATH = Path(tempfile.gettempdir()) / "aurora_eval_cache.json"
 
 DEFAULT_PACE_SECONDS = 13.0
 # The free tier for gemini-3.8-flash allows five generate_content requests per
@@ -158,9 +167,10 @@ class Record:
     result: dict
     gold_keywords_hit: bool = False
     missing: list[str] = field(default_factory=list)
+    citation_hit: bool = False
     retrieval_hit: bool = False
     abstained: bool = False
-    citation_valid: bool = True
+    invalid_citations: int = 0
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -218,29 +228,54 @@ def ingest_samples(service: Service, pacer: Pacer) -> list[dict]:
     return records
 
 
-def check_citation_validity(service: Service, result: dict) -> list[str]:
-    """Confirm every excerpt is a verbatim slice of the chunk it points at."""
+def check_citation_validity(service: Service, result: dict) -> tuple[int, list[str]]:
+    """Confirm every excerpt is a verbatim slice of the chunk it points at.
+
+    Returns the number of invalid citations and a description of each, so the
+    report can divide both the numerator and the denominator by sources rather
+    than counting a question that carries two bad citations once.
+    """
     problems: list[str] = []
+    invalid = 0
     store = service.get_store()
     for source in result["sources"]:
         chunk_id = f"{source['document_id']}::{source['location']['chunk_index']}"
-        stored = store._collection.get(ids=[chunk_id], include=["documents"])
-        texts = stored.get("documents") or []
+        texts = chains.read_chunks(store, ids=[chunk_id]).get("documents") or []
         if not texts:
+            invalid += 1
             problems.append(f"{source['document_name']}: chunk {chunk_id} is not in the index")
         elif source["excerpt"] not in texts[0]:
+            invalid += 1
             problems.append(f"{source['document_name']}: excerpt is not verbatim in {chunk_id}")
-    return problems
+    return invalid, problems
 
 
-def score(question: dict, result: dict) -> Record:
+def observe_retrieval(service: Service, question: str) -> dict:
+    """Measure the gated chunk set before the model is asked anything.
+
+    `citation_hit` alone cannot tell retrieval apart from citation discipline, so
+    this captures the documents that actually survived the gate. The result is a
+    real retrieval metric, and it is deliberately allowed to be worse than the
+    citation rate.
+    """
+    gated = rag.retrieve(question, service)
+    return {
+        "gated_count": len(gated),
+        "gated_documents": {chunk["metadata"]["document_name"] for chunk in gated},
+    }
+
+
+def score(question: dict, result: dict, observation: dict) -> Record:
     record = Record(question=question, result=result)
     keywords = question.get("gold_fact_keywords", [])
     record.missing = missing_keywords(result["answer"], keywords)
     record.gold_keywords_hit = not record.missing
 
     gold_documents = set(question.get("gold_document_names", []))
-    record.retrieval_hit = bool(gold_documents & record.source_documents)
+    # Citation recall: did the model end up citing a gold document.
+    record.citation_hit = bool(gold_documents & record.source_documents)
+    # Retrieval recall: did a gold document survive the gate before generation.
+    record.retrieval_hit = bool(gold_documents & observation["gated_documents"])
 
     record.abstained = (
         result["answerable"] is False and result["answer"] == UNAVAILABLE_MESSAGE
@@ -249,9 +284,8 @@ def score(question: dict, result: dict) -> Record:
 
 
 def run_sweep(service: Service, questions: list[dict], pacer: Pacer) -> list[dict]:
-    """Embed every question once and cache the raw distances for threshold analysis."""
+    """Embed every question once and report the raw distances for threshold analysis."""
     store = service.get_store()
-    embeddings = service.get_embeddings()
     observations = []
     for question in questions:
         pacer.wait()
@@ -272,7 +306,6 @@ def run_sweep(service: Service, questions: list[dict], pacer: Pacer) -> list[dic
         })
         best = raw[0][1] if raw else float("inf")
         print(f"  {question['id']} best_distance={best:.4f} retrieved={len(raw)}", flush=True)
-    _ = embeddings
     return observations
 
 
@@ -438,17 +471,21 @@ def run_evaluation(
     pacer: Pacer,
     cache_path: Path,
     cached: dict[str, dict],
-) -> list[Record]:
+) -> tuple[list[Record], int]:
     """Ask every question, surviving a free tier rate limit rather than aborting.
 
-    Each answer is cached as soon as it arrives. A daily quota wall stops the run
-    but never loses the work already paid for, and a rerun resumes from the cache.
+    Each new answer is cached as soon as it arrives. A daily quota wall stops the
+    run but never loses the work already paid for, and a resumed run picks up from
+    the cache. Returns the records and how many of them were replayed rather than
+    asked, which is what makes the freshness stamp in the report trustworthy.
     """
     records = []
+    replayed = 0
     for question in questions:
         cached_result = cached.get(question["id"])
         if cached_result is not None:
             result = cached_result
+            replayed += 1
             print(f"  {question['id']} restored from cache", flush=True)
         else:
             result = None
@@ -462,24 +499,26 @@ def run_evaluation(
                     time.sleep(pause)
                 pacer.wait()
                 try:
-                    result = ask(question["question"], service)
+                    result = rag.ask(question["question"], service)
                     break
                 except Exception as exc:
                     if attempt == len(QUOTA_BACKOFF_SECONDS):
                         print(
                             f"{question['id']} failed after retries: {exc}. "
-                            f"Completed answers are cached at {cache_path}; rerun to resume.",
+                            f"Completed answers are cached at {cache_path}; rerun with "
+                            f"--resume to continue.",
                             flush=True,
                         )
                         raise SystemExit(2) from exc
             assert result is not None
             cached[question["id"]] = result
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(json.dumps(cached, indent=2), encoding="utf-8")
 
-        record = score(question, result)
-        problems = check_citation_validity(service, result)
-        if problems:
-            record.citation_valid = False
+        record = score(question, result, observe_retrieval(service, question["question"]))
+        invalid, problems = check_citation_validity(service, result)
+        if invalid:
+            record.invalid_citations = invalid
             record.notes.extend(problems)
 
         records.append(record)
@@ -489,7 +528,7 @@ def run_evaluation(
             f"docs={result['distinct_document_count']}",
             flush=True,
         )
-    return records
+    return records, replayed
 
 
 def pct(numerator: int, denominator: int) -> str:
@@ -504,6 +543,8 @@ def build_report(
     ingested: list[dict],
     threshold: float,
     started_at: datetime,
+    fresh: bool,
+    replayed: int,
     calibration_table: str | None,
 ) -> str:
     by_category: dict[str, list[Record]] = {}
@@ -514,12 +555,16 @@ def build_report(
     unanswerable = by_category.get("unanswerable", [])
     multi = by_category.get("multi_evidence", [])
 
-    # Retrieval hit rate, reported per category. Unanswerable questions have no gold
-    # document by design, so the analogous figure is how often the gate let chunks
-    # through at all, which is the condition that makes abstention do real work.
-    answerable_hits = sum(1 for r in answerable if r.retrieval_hit)
-    multi_hits = sum(1 for r in multi if r.retrieval_hit)
-    overall_gold = answerable_hits + multi_hits
+    # Two separate numbers, reported separately. Citation recall asks whether the
+    # model ended up citing a gold document. Retrieval recall asks whether a gold
+    # document survived the gate at all, measured before generation. They are not
+    # the same measurement and folding them together hides which one failed.
+    answerable_cited = sum(1 for r in answerable if r.citation_hit)
+    multi_cited = sum(1 for r in multi if r.citation_hit)
+    answerable_retrieved = sum(1 for r in answerable if r.retrieval_hit)
+    multi_retrieved = sum(1 for r in multi if r.retrieval_hit)
+    overall_cited = answerable_cited + multi_cited
+    overall_retrieved = answerable_retrieved + multi_retrieved
     overall_total = len(answerable) + len(multi)
     unanswerable_gated = sum(1 for r in unanswerable if r.result["retrieved_count"] > 0)
 
@@ -550,8 +595,10 @@ def build_report(
             continue
         multi_correct += 1
 
+    # Both sides of this ratio count sources, so a question that carries two bad
+    # citations is penalised twice, exactly as it is counted twice in the numerator.
     citation_total = sum(len(r.result["sources"]) for r in records)
-    citation_bad = sum(1 for r in records if not r.citation_valid)
+    citation_bad = sum(r.invalid_citations for r in records)
 
     lines: list[str] = []
     lines.append("# Evaluation results")
@@ -566,6 +613,8 @@ def build_report(
     lines.append("| Item | Value |")
     lines.append("|---|---|")
     lines.append(f"| Started | {started_at.strftime('%Y-%m-%d %H:%M:%S UTC')} |")
+    lines.append(f"| Fresh run | **{'yes' if fresh else 'no'}** |")
+    lines.append(f"| Answers replayed from cache | {replayed} of {len(records)} |")
     lines.append(f"| Chat model | `{settings.gemini_chat_model}` |")
     lines.append(f"| Embedding model | `{settings.gemini_embedding_model}` |")
     lines.append(f"| Embedding dimensions | 768 |")
@@ -576,7 +625,22 @@ def build_report(
     lines.append(f"| Total chunks indexed | {sum(r['chunk_count'] for r in ingested)} |")
     lines.append(f"| Corpus | {', '.join(r['filename'] for r in ingested)} |")
     lines.append("")
+    if not fresh:
+        lines.append(
+            f"> **This is not a fresh run.** {replayed} of {len(records)} answers were "
+            f"replayed from a saved cache instead of being asked again. The numbers below "
+            f"describe that earlier run. Re-run without `--resume` to reproduce them."
+        )
+        lines.append("")
     lines.append("## Metrics against targets")
+    lines.append("")
+    lines.append(
+        "Two families of measurement, kept apart on purpose. **Citation recall** asks "
+        "whether the answer cited a gold document. **Retrieval recall at k** asks whether "
+        "a gold document survived the relevance gate at all, captured before generation. "
+        "Citation recall cannot fall below retrieval recall for the same question, and a "
+        "gap between them is citation discipline rather than retrieval."
+    )
     lines.append("")
     lines.append("| Metric | Target | Result | Met |")
     lines.append("|---|---|---|---|")
@@ -585,22 +649,40 @@ def build_report(
         lines.append(f"| {name} | {target} | {result} | {'yes' if met else 'no'} |")
 
     add(
-        "Retrieval hit rate, answerable",
+        "Retrieval recall at k, answerable",
         "at least 80 percent",
-        pct(answerable_hits, len(answerable)),
-        answerable_hits / max(len(answerable), 1) >= 0.8,
+        pct(answerable_retrieved, len(answerable)),
+        answerable_retrieved / max(len(answerable), 1) >= 0.8,
     )
     add(
-        "Retrieval hit rate, multi evidence",
+        "Retrieval recall at k, multi evidence",
         "at least 80 percent",
-        pct(multi_hits, len(multi)),
-        multi_hits / max(len(multi), 1) >= 0.8,
+        pct(multi_retrieved, len(multi)),
+        multi_retrieved / max(len(multi), 1) >= 0.8,
     )
     add(
-        "Retrieval hit rate, overall",
+        "Retrieval recall at k, overall",
         "at least 80 percent",
-        pct(overall_gold, overall_total),
-        overall_gold / max(overall_total, 1) >= 0.8,
+        pct(overall_retrieved, overall_total),
+        overall_retrieved / max(overall_total, 1) >= 0.8,
+    )
+    add(
+        "Gold document citation rate, answerable",
+        "reported",
+        pct(answerable_cited, len(answerable)),
+        True,
+    )
+    add(
+        "Gold document citation rate, multi evidence",
+        "reported",
+        pct(multi_cited, len(multi)),
+        True,
+    )
+    add(
+        "Gold document citation rate, overall",
+        "reported",
+        pct(overall_cited, overall_total),
+        True,
     )
     add(
         "Answerable accuracy, all gold keywords present",
@@ -634,9 +716,9 @@ def build_report(
     )
     lines.append("")
     lines.append(
-        f"The multi evidence rate is reported on its own line and is not folded into "
-        f"the overall retrieval number, so a collapse in multi document answers "
-        f"cannot hide behind a strong answerable score."
+        "The multi evidence rate is reported on its own line and is not folded into "
+        f"the overall recall number, so a collapse in multi document answers cannot "
+        f"hide behind a strong answerable score."
     )
     lines.append("")
     lines.append("## Retrieval behaviour on unanswerable questions")
@@ -662,16 +744,23 @@ def build_report(
     lines.append("## Per question detail")
     lines.append("")
     lines.append(
-        "| Id | Category | Answerable | Chunks | Documents | Gold keywords | Notes |"
+        "| Id | Category | Answerable | Gold retrieved | Gold cited | Chunks | Documents | "
+        "Gold keywords | Notes |"
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for record in records:
+        # Unanswerable questions have no gold document by design, so recall and
+        # citation recall are not defined for them.
         if record.category == "unanswerable":
             keywords = "n/a" if record.abstained else "failed"
+            gold_retrieved = gold_cited = "n/a"
         else:
             keywords = "yes" if record.gold_keywords_hit else f"no: {record.missing}"
+            gold_retrieved = "yes" if record.retrieval_hit else "no"
+            gold_cited = "yes" if record.citation_hit else "no"
         lines.append(
             f"| {record.id} | {record.category} | {record.result['answerable']} | "
+            f"{gold_retrieved} | {gold_cited} | "
             f"{record.result['retrieved_count']} | "
             f"{record.result['distinct_document_count']} | {keywords} | "
             f"{'; '.join(record.notes) or 'clean'} |"
@@ -724,7 +813,15 @@ def build_report(
         "carries at least two distinct documents, cites both gold documents, and "
         "contains every gold fact for each of them. Citation validity is checked "
         "structurally: every returned excerpt must appear verbatim inside the "
-        "indexed chunk named by its own document id and chunk index."
+        "indexed chunk named by its own document id and chunk index, and the validity "
+        "ratio divides invalid citations by total citations, not by questions."
+    )
+    lines.append("")
+    lines.append(
+        "Retrieval recall at k is measured separately, before generation, by gating the "
+        f"question's chunks and checking whether a gold document is among them at k = "
+        f"{settings.retrieval_top_k}. That requires one extra embedding request per "
+        f"question, which is why it is not folded into the answer path."
     )
     lines.append("")
     return "\n".join(lines)
@@ -734,21 +831,31 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sweep", action="store_true",
-        help="embed every question and report threshold behaviour without model calls",
+        help="embed every question and report threshold behaviour without generation calls",
     )
     parser.add_argument("--threshold", type=float, default=None, help="override the gate")
     parser.add_argument("--pace", type=float, default=DEFAULT_PACE_SECONDS, help="seconds between calls")
     parser.add_argument("--output", type=Path, default=RESULTS_PATH, help="results file path")
-    parser.add_argument("--sweep-output", type=Path, default=None, help="write the sweep table here")
     parser.add_argument(
-        "--cache", type=Path,
-        default=Path(tempfile.gettempdir()) / "aurora_eval_cache.json",
-        help="resume file for completed answers, so a quota wall costs nothing",
+        "--sweep-output", type=Path, default=SWEEP_PATH,
+        help="write the generated calibration artifact here",
     )
-    parser.add_argument("--fresh", action="store_true", help="ignore and clear the cache")
     parser.add_argument(
-        "--calibration", type=Path, default=None,
-        help="sweep table to embed in the results file as threshold calibration evidence",
+        "--calibration", type=Path, default=SWEEP_PATH,
+        help="generated sweep artifact to embed in the results file as calibration evidence",
+    )
+    parser.add_argument(
+        "--cache", type=Path, default=DEFAULT_CACHE_PATH,
+        help="where a resumed run keeps completed answers",
+    )
+    parser.add_argument(
+        "--fresh", dest="fresh", action="store_true", default=True,
+        help="ask every question again and delete any saved answers first (the default)",
+    )
+    parser.add_argument(
+        "--resume", dest="fresh", action="store_false",
+        help="reuse saved answers instead of calling the model again; the report is "
+             "then stamped as not fresh",
     )
     args = parser.parse_args()
 
@@ -766,7 +873,6 @@ def main() -> int:
         print("ingesting sample documents")
         ingested = ingest_samples(service, pacer)
 
-        sweep_notes = None
         if args.sweep:
             print("sweeping retrieval for threshold calibration")
             observations = run_sweep(service, questions, pacer)
@@ -775,18 +881,29 @@ def main() -> int:
             print(report)
             if args.sweep_output:
                 args.sweep_output.write_text(report, encoding="utf-8")
+                print(f"wrote {args.sweep_output}")
             return 0
 
         print(f"running {len(questions)} questions at threshold {threshold}")
         cache_path = args.cache
         if args.fresh:
-            cache_path.unlink(missing_ok=True)
+            if cache_path.exists():
+                cache_path.unlink()
+                print(f"fresh run: deleted the saved answers at {cache_path}")
+        else:
+            print(f"resuming: saved answers at {cache_path} will be reused")
         cached: dict[str, dict] = (
             json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
         )
-        if cached:
-            print(f"resuming with {len(cached)} cached answers from {cache_path}")
-        records = run_evaluation(service, questions, pacer, cache_path, cached)
+        records, replayed = run_evaluation(service, questions, pacer, cache_path, cached)
+
+        if replayed:
+            print("")
+            print("!" * 72)
+            print(f"! {replayed}/{len(questions)} answers restored from cache; "
+                  f"results are NOT a fresh run")
+            print("! Re-run without --resume to ask every question again.")
+            print("!" * 72)
 
         report = build_report(
             records,
@@ -794,7 +911,10 @@ def main() -> int:
             ingested,
             threshold,
             started_at,
-            args.calibration.read_text(encoding="utf-8").strip() if args.calibration else None,
+            args.fresh and replayed == 0,
+            replayed,
+            args.calibration.read_text(encoding="utf-8").strip()
+            if args.calibration and args.calibration.exists() else None,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")

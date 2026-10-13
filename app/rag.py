@@ -244,12 +244,8 @@ def documents_in_store(service: Service) -> list[dict]:
     only fills in a name for a document whose chunks carry no readable metadata.
     """
     store = service.get_store()
-    records = store._collection.get(include=["metadatas"])
-
     grouped: dict[str, dict[str, Any]] = {}
-    for metadata in records.get("metadatas") or []:
-        if not metadata:
-            continue
+    for metadata in chains.metadatas_of(store):
         document_id = metadata.get("document_id")
         if not document_id:
             continue
@@ -279,8 +275,7 @@ def documents_in_store(service: Service) -> list[dict]:
 def delete_document(document_id: str, service: Service) -> bool:
     """Delete a document and its chunks. Returns False when the id is unknown."""
     store = service.get_store()
-    existing = store._collection.get(where={"document_id": document_id}, limit=1)
-    if not existing.get("ids"):
+    if not chains.has_chunks(store, document_id):
         service.registry.remove(document_id)
         return False
 

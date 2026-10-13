@@ -165,13 +165,13 @@ def test_retrieval_requires_a_model_service(settings):
 
 def test_delete_removes_every_chunk_of_a_document(corpus, store_of):
     document_id = "benefits_guide"
-    assert store_of()._collection.get(where={"document_id": document_id})["ids"]
+    assert chains.read_chunks(store_of(), where={"document_id": document_id})["ids"]
 
     assert rag.delete_document(document_id, corpus) is True
 
-    assert not store_of()._collection.get(where={"document_id": document_id})["ids"]
+    assert not chains.read_chunks(store_of(), where={"document_id": document_id})["ids"]
     survivor = "employee_handbook"
-    assert store_of()._collection.get(where={"document_id": survivor})["ids"], (
+    assert chains.read_chunks(store_of(), where={"document_id": survivor})["ids"], (
         "deleting one document must leave the others alone"
     )
 
@@ -190,7 +190,7 @@ def test_reingesting_the_same_name_replaces_chunks_instead_of_duplicating_them(
 
     assert first["chunk_count"] == second["chunk_count"]
     assert first["document_id"] == second["document_id"] == "benefits_guide"
-    stored = store_of()._collection.get(where={"document_id": "benefits_guide"})
+    stored = chains.read_chunks(store_of(), where={"document_id": "benefits_guide"})
     assert len(stored["ids"]) == second["chunk_count"], "re-ingest must not accumulate chunks"
 
 
@@ -218,8 +218,8 @@ def test_the_whole_corpus_produces_at_least_sixty_chunks(corpus):
 
 
 def test_chunks_respect_the_configured_size(corpus, store_of):
-    records = store_of()._collection.get(
-        where={"document_id": "employee_handbook"}, include=["documents"]
+    records = chains.read_chunks(
+        store_of(), where={"document_id": "employee_handbook"}, include=["documents"]
     )
 
     for text in records["documents"]:
@@ -288,8 +288,8 @@ def test_overlap_is_present_between_consecutive_chunks(service, write_temp, samp
 
 
 def test_chunk_identifiers_are_explicit_and_unique(corpus, store_of):
-    records = store_of()._collection.get(
-        where={"document_id": "it_security_policy"}, include=["metadatas"]
+    records = chains.read_chunks(
+        store_of(), where={"document_id": "it_security_policy"}, include=["metadatas"]
     )
 
     ids = records["ids"]
@@ -338,7 +338,7 @@ def test_evidence_excerpts_are_verbatim_slices_of_indexed_chunks(corpus, verbati
     result = rag.ask(question, corpus)
 
     assert result["sources"], "a passing query must return evidence"
-    stored = store_of()._collection.get(include=["documents"])
+    stored = chains.read_chunks(store_of(), include=["documents"])
     for source in result["sources"]:
         assert any(
             source["excerpt"] in text for text in stored["documents"]
@@ -360,7 +360,8 @@ def test_evidence_offsets_address_the_source_document(corpus, verbatim_query, st
         if source["document_name"].endswith(".pdf"):
             continue
         location = source["location"]
-        stored = store_of()._collection.get(
+        stored = chains.read_chunks(
+            store_of(),
             ids=[f"{source['document_id']}::{location['chunk_index']}"],
             include=["documents"],
         )
@@ -383,7 +384,8 @@ def test_evidence_offsets_for_a_pdf_address_the_page_text(corpus, verbatim_query
     for source in result["sources"]:
         location = source["location"]
         assert "page_number" in location and location["page_number"] >= 1
-        stored = store_of()._collection.get(
+        stored = chains.read_chunks(
+            store_of(),
             ids=[f"{source['document_id']}::{location['chunk_index']}"],
             include=["documents", "metadatas"],
         )
