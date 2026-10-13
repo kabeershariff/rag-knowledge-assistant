@@ -547,9 +547,11 @@ Studio first.
   enrolment deadline lives in `it_security_policy.txt` while new hire equipment
   readiness lives in `employee_handbook.pdf`.
 
-The corpus is the internal knowledge base of a fictional company, Aurora Labs, so
-no correct answer can arrive from general world knowledge. That removes a whole
-class of false positive from the scoring.
+All four sample documents describe the same invented organisation, so no correct
+answer can arrive from general world knowledge. That removes a whole class of
+false positive from the scoring, and it is why several questions name the company
+directly: an invented name cannot be answered from memory, so a correct answer
+proves the answer came from the index rather than from the model.
 
 ### Results
 

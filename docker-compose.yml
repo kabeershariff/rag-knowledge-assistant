@@ -1,7 +1,7 @@
 services:
   app:
     build: .
-    image: aurora-knowledge-assistant
+    image: rag-knowledge-assistant
     env_file: .env
     ports:
       - "8000:8000"
