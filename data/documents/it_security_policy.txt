@@ -1,0 +1,263 @@
+AURORA LABS INFORMATION SECURITY POLICY
+
+Effective date: 1 January 2026
+Owner: Security Engineering
+Approved by: the security committee
+
+This policy sets the minimum security requirements for every person who uses Aurora
+Labs systems or handles Aurora Labs data. It applies to employees, contractors and
+interns. Local addenda may add requirements but may not remove any.
+
+
+1. PURPOSE AND SCOPE
+
+Aurora Labs builds software that processes customer data on behalf of logistics
+companies. A security failure at Aurora Labs can expose that customer data, so the
+rules in this policy exist to reduce the chance of unauthorised access and to limit
+the damage when something does go wrong.
+
+The policy covers every company owned device, every cloud service the company
+operates, and every remote connection to the company network. It applies during
+working hours and outside them, because an attacker does not keep office hours.
+
+
+2. PASSWORD RULES
+
+2.1 Minimum standards
+
+Every password used for an Aurora Labs account must be at least fourteen characters
+long. Passphrases of three or more unrelated words are encouraged. Passwords must
+not contain the employee's name, employee number or the word aurora.
+
+2.2 Uniqueness
+
+A password used for an Aurora Labs account must not be reused on any other service.
+The company provides a password manager to every employee at no cost. All work
+credentials must be stored in it.
+
+2.3 Rotation
+
+Passwords are rotated every twelve months. A password must be changed immediately if
+there is any suspicion that it has been disclosed, if the employee sees a login from
+an unfamiliar location, or if the security team requests a change. Forced rotation
+notifications arrive from the identity provider and never from email.
+
+
+3. MULTI FACTOR AUTHENTICATION
+
+3.1 Where it is required
+
+Multi factor authentication is mandatory for email, the code repository, the cloud
+console, the expense system and every internal application reachable through the
+intranet. There are no exceptions to this list.
+
+3.2 Approved factors
+
+Hardware security keys registered through the identity provider are the preferred
+factor and are issued to every employee. Time based one time password applications
+are acceptable for services that do not support hardware keys.
+
+3.3 Disallowed factors
+
+Short message service codes are not an approved factor for any Aurora Labs service,
+because they can be intercepted through SIM swapping. Push approval prompts are
+permitted only for the virtual private network client, and only as a second factor
+after the primary factor has already succeeded.
+
+
+4. DEVICE ENROLMENT
+
+4.1 Company laptops
+
+Every company laptop must be enrolled in mobile device management within five
+business days of the employee receiving the device. Enrolment is completed by the
+employee through the company portal and installs full disk encryption, the endpoint
+agent and the automatic screen lock policy.
+
+4.2 Personal devices
+
+Any personal phone or tablet used to read company email or to access internal
+applications must be enrolled in mobile device management within ten business days of
+first use. Enrolment of a personal device installs only the mail profile and the
+remote wipe certificate for company data. It does not install the endpoint agent.
+
+4.3 Lost devices
+
+A lost or stolen company device must be reported to the security team within one hour
+of discovery. The security team revokes sessions and, for company laptops, issues a
+remote wipe command. Reports go to the security team through the incident form
+described in section 6, not by email.
+
+
+5. DATA CLASSIFICATION
+
+All Aurora Labs data must be classified into one of four levels before it is stored
+in a new system.
+
+5.1 Public
+
+Public data is intended for anyone. Marketing pages, published pricing and the
+public status page are public. No special handling is required.
+
+5.2 Internal
+
+Internal data is not secret but should not leave the company. Org charts, meeting
+notes and internal announcements are internal. Internal data may be shared with any
+employee and with contractors under a signed agreement.
+
+5.3 Confidential
+
+Confidential data causes harm to a customer or to Aurora Labs if it leaks. Customer
+contracts, production data exports and financial forecasts are confidential.
+Confidential data must be stored only in systems approved by the security team, must
+be encrypted in transit, and must never be pasted into a public chat channel or a
+personal note taking application.
+
+5.4 Restricted
+
+Restricted data is the most sensitive level and includes authentication secrets,
+private keys and any dataset containing personal data of identifiable individuals.
+Restricted data must be stored only in the secrets manager or the designated data
+store. Access is granted per named individual, reviewed every ninety days, and
+logged. Restricted data must never be copied to a laptop, a removable drive or a
+consumer cloud storage service.
+
+
+6. INCIDENT REPORTING
+
+6.1 What counts as an incident
+
+An incident is any suspected or confirmed unauthorised access, loss, disclosure or
+destruction of company data, any successful phishing attempt against an employee, and
+any malware infection on a company device. If an employee is unsure whether an event
+counts, it counts and should be reported.
+
+6.2 Reporting deadline
+
+A suspected incident must be reported within one hour of discovery. Reports are made
+through the incident form in the security portal. The form reaches the on call
+security engineer immediately, at any hour.
+
+6.3 What to include
+
+The report must state what was observed, when it was observed, which systems or data
+may be affected, and any action already taken. An employee who has accidentally
+clicked a link must say so plainly. Delay caused by hesitation increases the damage;
+the company does not discipline employees for reporting promptly and honestly.
+
+6.4 Triage and follow up
+
+The on call engineer triages the report within four hours and assigns a severity.
+Severity one incidents trigger a written post mortem within five business days of
+closure. Severity two incidents trigger a written post mortem within ten business
+days. Lower severities are reviewed in the monthly security meeting.
+
+
+7. REMOTE ACCESS
+
+7.1 Virtual private network
+
+Every connection to an internal Aurora Labs system must go through the company
+virtual private network. Direct exposure of an internal service to the public
+internet is not permitted, and no internal hostname resolves from outside the VPN.
+
+7.2 Client configuration
+
+Split tunnelling is disabled on the company VPN client. When the client is connected,
+all traffic routes through the tunnel. Employees must keep the client up to date and
+must install a client update within seven days of a release.
+
+7.3 Public networks
+
+On public wireless networks, employees must connect through the VPN before opening
+any internal application. Employees should prefer mobile hotspots over open wireless
+networks when travelling.
+
+
+8. CLOUD AND SAAS USAGE
+
+8.1 Approved services
+
+Aurora Labs systems must be hosted only in the cloud accounts registered with the
+security team. Creating a new cloud account, signing up for a new software as a
+service product with company data, or moving data between regions requires prior
+approval from the security team. Unapproved shadow services discovered during audit
+are decommissioned.
+
+8.2 Credential handling
+
+Cloud console access is granted through single sign on and is never shared. Long
+lived access keys are prohibited where a short lived token can be used, and any
+access key that must exist must be stored in the secrets manager and rotated every
+ninety days. Service accounts are reviewed quarterly and any account unused for one
+hundred and eighty days is disabled.
+
+8.3 Customer data exports
+
+A production data export containing customer records may be taken only through the
+approved export pipeline, which writes to the restricted data store and records the
+purpose. A copy to a laptop, a spreadsheet on a personal device or a consumer file
+sharing service is a policy violation and is treated as an incident under section 6.
+
+
+9. PHISHING AND SOCIAL ENGINEERING
+
+9.1 Recognising attempts
+
+Employees will occasionally receive messages that imitate Aurora Labs or a vendor and
+seek credentials, payment or a file transfer. Common signs are an unusual sender
+address, a request to bypass a normal process, urgency or threat language, and a
+link whose domain does not match the vendor's real domain.
+
+9.2 Verification of payment changes
+
+Any message requesting a change to bank details or a payment to a new account must be
+verified by a second channel, typically a phone call to a known number, before any
+action is taken. This applies to messages that appear to come from an executive.
+
+9.3 Reporting
+
+Suspected phishing messages must be reported within one hour using the report phishing
+button in the mail client. The message must not be forwarded manually to colleagues,
+because forwarding spreads the attempt. The security team quarantines similar
+messages across all mailboxes after a single report.
+
+
+10. TRAINING
+
+10.1 Onboarding
+
+Every new employee completes the security onboarding module within their first five
+business days. The module covers this policy, the phishing reporting process and the
+data classification levels.
+
+10.2 Ongoing training
+
+All employees complete an annual security refresher. Employees who handle restricted
+data complete an additional module every six months. Completion is tracked by the
+security team and non completion is escalated to the employee's manager after the
+deadline.
+
+
+11. PHYSICAL SECURITY
+
+Laptops must not be left unattended in a public place. When working from a public
+location, the screen should be positioned away from passers by and the laptop must
+never be checked into hold luggage in an unlocked container. Company documents
+printed at home must be shredded or destroyed when no longer needed. Access badges
+for office buildings must be reported lost within one hour, on the same timeline as
+a lost device under section 4.3.
+
+
+12. POLICY EXCEPTIONS
+
+An exception to any rule in this policy requires a written request to the security
+committee. The committee reviews exceptions monthly. An approved exception states a
+business reason, an expiry date and a compensating control, and no exception is
+valid for longer than twelve months without a fresh review.
+
+
+13. REVIEW
+
+This policy is reviewed every twelve months by the security committee, or sooner if
+a material change occurs in the company's systems or in applicable law.
