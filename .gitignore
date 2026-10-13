@@ -1,0 +1,26 @@
+# secrets
+.env
+
+# vector index
+data/chroma/
+
+# python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# working notes, brief and backups
+build.md
+for_me.txt
+simplify_build.md
+task.txt
+*.bak
